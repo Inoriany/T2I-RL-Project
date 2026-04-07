@@ -162,9 +162,10 @@ class JanusProGenerator(ImageGenerator):
         # Configure quantization if requested
         quantization_config = None
         if self.load_in_4bit:
+            # Use float16 for 4-bit to avoid dtype mismatch in conv layers
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_compute_dtype=torch.float16,
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_quant_type="nf4",
             )
@@ -187,10 +188,12 @@ class JanusProGenerator(ImageGenerator):
             
             # Load model with optional quantization
             if quantization_config is not None:
+                # Use float16 for quantized models to avoid dtype mismatches
                 self.model = AutoModelForCausalLM.from_pretrained(
                     self.model_name_or_path,
                     trust_remote_code=True,
                     quantization_config=quantization_config,
+                    torch_dtype=torch.float16,
                     device_map="auto",
                 )
             else:
@@ -214,10 +217,12 @@ class JanusProGenerator(ImageGenerator):
             
             # Load model with optional quantization
             if quantization_config is not None:
+                # Use float16 for quantized models to avoid dtype mismatches
                 self.model = AutoModelForCausalLM.from_pretrained(
                     self.model_name_or_path,
                     trust_remote_code=True,
                     quantization_config=quantization_config,
+                    torch_dtype=torch.float16,
                     device_map="auto",
                 )
             else:
