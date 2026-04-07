@@ -1,0 +1,33 @@
+# Reward-Weighted MLE Training Configuration
+# Simpler alternative to GRPO
+
+algorithm: "reward_weighted"
+
+# Basic training params
+learning_rate: 5e-6
+num_epochs: 10
+batch_size: 8
+gradient_accumulation_steps: 2
+max_grad_norm: 1.0
+
+# Reward weighting parameters
+reward_weighted:
+  temperature: 2.0           # Softmax temperature for weights
+  min_reward_threshold: 0.1  # Filter out very low reward samples
+  use_exponential: false     # Use exp(r/T) instead of softmax
+  normalize_weights: true    # Normalize weights to sum to 1
+
+# Optimization
+optimizer: "adamw"
+warmup_steps: 50
+weight_decay: 0.01
+
+# Learning rate schedule
+lr_scheduler: "linear"
+
+# Checkpointing
+save_steps: 500
+eval_steps: 100
+logging_steps: 10
+output_dir: "./outputs/reward_weighted"
+save_total_limit: 3

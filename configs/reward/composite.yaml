@@ -1,0 +1,32 @@
+# Composite Reward Configuration
+# Combines CLIP (fast filtering) + VLM (detailed evaluation)
+
+type: "composite"
+
+# CLIP component (for fast pre-filtering)
+clip:
+  model_name: "ViT-L-14"
+  pretrained: "openai"
+  weight: 0.3
+  
+  # Use CLIP as gate: only call VLM if CLIP score > threshold
+  gate_threshold: 0.2  # null to disable gating
+
+# VLM component (for detailed evaluation)
+vlm:
+  provider: "openai"
+  model_name: "gpt-4-vision-preview"
+  weight: 0.7
+  
+  aspects:
+    object_presence: 0.30
+    attribute_accuracy: 0.30
+    spatial_relations: 0.25
+    overall_quality: 0.15
+
+# Aggregation method: "weighted_sum", "min", "product"
+aggregation: "weighted_sum"
+
+cache:
+  enabled: true
+  cache_dir: "./cache/composite_rewards"

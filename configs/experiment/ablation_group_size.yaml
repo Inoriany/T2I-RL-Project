@@ -1,0 +1,47 @@
+# @package _global_
+# ============================================================================
+# Ablation: Group Size Comparison
+# ============================================================================
+# Purpose: Study effect of group size K on training
+# Usage: python scripts/train.py --config-name experiment/ablation_group_size \
+#        training.grpo.group_size=2,4,8 -m
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: clip
+  - _self_
+
+experiment:
+  name: "ablation_group_size"
+  description: "Ablation study on GRPO group size"
+  tags: ["ablation", "group_size", "grpo"]
+
+# Vary group size
+training:
+  learning_rate: 1e-5
+  num_epochs: 5
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  
+  grpo:
+    group_size: 4  # Override with -m flag: 2, 4, 8
+    kl_coef: 0.01
+    normalize_rewards: true
+  
+  output_dir: "./outputs/ablation_group_size/K${training.grpo.group_size}"
+
+# Fixed settings
+reward:
+  type: "clip"
+
+data:
+  train_file: "data/prompts/train_prompts.json"
+  max_train_samples: 200  # Smaller for ablation
+
+logging:
+  wandb_run_name: "ablation-group-K${training.grpo.group_size}"
+
+hardware:
+  seed: 42

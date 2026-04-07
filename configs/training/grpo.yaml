@@ -1,0 +1,41 @@
+# GRPO Training Configuration
+# Group Relative Policy Optimization
+
+algorithm: "grpo"
+
+# Basic training params
+learning_rate: 1e-5
+num_epochs: 10
+batch_size: 4
+gradient_accumulation_steps: 4
+max_grad_norm: 1.0
+
+# GRPO-specific parameters
+grpo:
+  group_size: 4              # K samples per prompt
+  temperature: 1.0           # Sampling temperature
+  kl_coef: 0.01              # KL penalty coefficient
+  clip_range: 0.2            # PPO-style clipping (optional)
+  normalize_rewards: true    # Normalize within groups
+  use_advantage_normalization: true
+  baseline_type: "group_mean"  # "group_mean", "ema", "none"
+  ema_decay: 0.99            # For EMA baseline
+
+# Optimization
+optimizer: "adamw"
+warmup_steps: 100
+warmup_ratio: 0.1
+weight_decay: 0.01
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_epsilon: 1e-8
+
+# Learning rate schedule
+lr_scheduler: "cosine"  # "linear", "cosine", "constant"
+
+# Checkpointing
+save_steps: 500
+eval_steps: 100
+logging_steps: 10
+output_dir: "./outputs/grpo"
+save_total_limit: 3

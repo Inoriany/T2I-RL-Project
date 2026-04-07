@@ -1,0 +1,78 @@
+# @package _global_
+# ============================================================================
+# Debug/Test Configuration
+# ============================================================================
+# Purpose: Quick test run to verify code works
+# Usage: python scripts/train.py --config-name experiment/debug
+# Expected: ~5 minutes, minimal resources
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: clip
+  - _self_
+
+experiment:
+  name: "debug"
+  description: "Quick debug run to test code"
+  tags: ["debug", "test"]
+
+# Minimal model config
+model:
+  model_path: "deepseek-ai/Janus-Pro-1B"
+  dtype: "bfloat16"
+  
+  lora:
+    enabled: true
+    r: 4  # Small rank for speed
+    alpha: 8
+
+# Minimal training
+training:
+  learning_rate: 1e-4  # Higher LR for faster convergence in test
+  num_epochs: 1
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  
+  grpo:
+    group_size: 2  # Minimal group size
+    kl_coef: 0.01
+  
+  warmup_steps: 2
+  save_steps: 10
+  eval_steps: 5
+  logging_steps: 1
+  output_dir: "./outputs/debug"
+  save_total_limit: 1
+
+# Fast reward
+reward:
+  type: "clip"
+  clip:
+    model_name: "ViT-B-32"  # Smaller CLIP model
+    pretrained: "openai"
+
+# Minimal data
+data:
+  train_file: "data/prompts/train_prompts.json"
+  eval_file: "data/prompts/val_prompts.json"
+  max_train_samples: 10  # Just 10 samples
+  max_eval_samples: 5
+
+# Skip benchmarks
+evaluation:
+  benchmarks: []
+  compute_vlm_score: false
+  save_images: false
+
+# Disable wandb for debug
+logging:
+  use_wandb: false
+  logging_steps: 1
+
+# Hardware
+hardware:
+  bf16: true
+  dataloader_num_workers: 0  # No multiprocessing for debugging
+  seed: 42

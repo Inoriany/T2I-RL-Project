@@ -1,0 +1,38 @@
+# VLM-based Reward Configuration (GPT-4V)
+# Best compositional understanding, requires API key
+
+type: "vlm"
+
+vlm:
+  provider: "openai"
+  model_name: "gpt-4-vision-preview"
+  
+  # API settings
+  max_retries: 3
+  timeout: 60
+  rate_limit_delay: 1.0  # seconds between requests
+  
+  # Evaluation aspects and weights
+  aspects:
+    object_presence: 0.30
+    attribute_accuracy: 0.30
+    spatial_relations: 0.25
+    overall_quality: 0.15
+  
+  # Custom evaluation prompt (null for default)
+  evaluation_prompt: |
+    Evaluate this generated image against the prompt: "{prompt}"
+    
+    Score each aspect from 0 to 10:
+    1. OBJECT PRESENCE: Are all mentioned objects present? No extra objects?
+    2. ATTRIBUTE ACCURACY: Correct colors, sizes, shapes, textures?
+    3. SPATIAL RELATIONS: Objects positioned correctly relative to each other?
+    4. OVERALL QUALITY: Image quality, coherence, natural appearance?
+    
+    Return ONLY a JSON object:
+    {{"presence": X, "attributes": X, "spatial": X, "quality": X}}
+
+# Caching (to reduce API costs)
+cache:
+  enabled: true
+  cache_dir: "./cache/vlm_rewards"

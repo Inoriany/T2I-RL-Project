@@ -1,0 +1,26 @@
+# VLM-based Reward Configuration (Claude)
+# Alternative to GPT-4V
+
+type: "vlm"
+
+vlm:
+  provider: "anthropic"
+  model_name: "claude-3-opus-20240229"
+  
+  # API settings
+  max_retries: 3
+  timeout: 60
+  rate_limit_delay: 0.5
+  
+  # Evaluation aspects and weights
+  aspects:
+    object_presence: 0.30
+    attribute_accuracy: 0.30
+    spatial_relations: 0.25
+    overall_quality: 0.15
+  
+  evaluation_prompt: null  # Use default
+
+cache:
+  enabled: true
+  cache_dir: "./cache/vlm_rewards"

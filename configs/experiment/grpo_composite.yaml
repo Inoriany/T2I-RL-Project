@@ -1,0 +1,85 @@
+# @package _global_
+# ============================================================================
+# Experiment: GRPO with Composite Reward (CLIP + VLM)
+# ============================================================================
+# Purpose: Use CLIP for fast filtering, VLM for detailed evaluation
+# Usage: python scripts/train.py --config-name experiment/grpo_composite
+# Note: Best balance of quality and API costs
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: composite
+  - _self_
+
+experiment:
+  name: "grpo_composite"
+  description: "GRPO training with composite CLIP+VLM reward"
+  tags: ["grpo", "composite", "clip", "vlm", "training"]
+
+# Model configuration
+model:
+  model_path: "deepseek-ai/Janus-Pro-1B"
+  dtype: "bfloat16"
+  
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+
+# Training configuration
+training:
+  learning_rate: 1e-5
+  num_epochs: 10
+  batch_size: 2
+  gradient_accumulation_steps: 8
+  
+  grpo:
+    group_size: 4
+    kl_coef: 0.01
+    normalize_rewards: true
+  
+  warmup_steps: 100
+  save_steps: 500
+  eval_steps: 200
+  output_dir: "./outputs/grpo_composite"
+
+# Reward: Composite (CLIP gate + VLM)
+reward:
+  type: "composite"
+  
+  clip:
+    model_name: "ViT-L-14"
+    pretrained: "openai"
+    weight: 0.3
+    gate_threshold: 0.2  # Only call VLM if CLIP > 0.2
+  
+  vlm:
+    provider: "openai"
+    model_name: "gpt-4-vision-preview"
+    weight: 0.7
+  
+  aggregation: "weighted_sum"
+  
+  cache:
+    enabled: true
+    cache_dir: "./cache/composite_rewards"
+
+# Data
+data:
+  train_file: "data/prompts/train_prompts.json"
+  eval_file: "data/prompts/val_prompts.json"
+  max_train_samples: null
+  max_eval_samples: 50
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: "t2i-rl"
+  wandb_run_name: "grpo-composite-${now:%Y%m%d-%H%M%S}"
+
+# Hardware
+hardware:
+  bf16: true
+  seed: 42

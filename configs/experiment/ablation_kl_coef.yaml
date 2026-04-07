@@ -1,0 +1,45 @@
+# @package _global_
+# ============================================================================
+# Ablation: KL Coefficient Comparison
+# ============================================================================
+# Purpose: Study effect of KL regularization strength
+# Usage: python scripts/train.py --config-name experiment/ablation_kl_coef \
+#        training.grpo.kl_coef=0.001,0.01,0.1,1.0 -m
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: clip
+  - _self_
+
+experiment:
+  name: "ablation_kl_coef"
+  description: "Ablation study on KL coefficient"
+  tags: ["ablation", "kl_coef", "grpo"]
+
+training:
+  learning_rate: 1e-5
+  num_epochs: 5
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  
+  grpo:
+    group_size: 4
+    kl_coef: 0.01  # Override: 0.001, 0.01, 0.1, 1.0
+    normalize_rewards: true
+  
+  output_dir: "./outputs/ablation_kl/beta${training.grpo.kl_coef}"
+
+reward:
+  type: "clip"
+
+data:
+  train_file: "data/prompts/train_prompts.json"
+  max_train_samples: 200
+
+logging:
+  wandb_run_name: "ablation-kl-${training.grpo.kl_coef}"
+
+hardware:
+  seed: 42
