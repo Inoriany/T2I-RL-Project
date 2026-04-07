@@ -130,6 +130,7 @@ class JanusProGenerator(ImageGenerator):
     - Autoregressive image generation using visual tokens
     - Supports CFG (Classifier-Free Guidance)
     - 384x384 image output with 576 tokens per image
+    - Supports 4-bit/8-bit quantization for memory efficiency
     """
     
     def __init__(
@@ -138,9 +139,13 @@ class JanusProGenerator(ImageGenerator):
         device: str = "cuda",
         dtype: torch.dtype = torch.bfloat16,
         use_flash_attention: bool = True,
+        load_in_4bit: bool = False,
+        load_in_8bit: bool = False,
     ):
         super().__init__(model_name_or_path, device, dtype)
         self.use_flash_attention = use_flash_attention
+        self.load_in_4bit = load_in_4bit
+        self.load_in_8bit = load_in_8bit
         self.vl_chat_processor = None
         self.tokenizer = None
         self.lora_enabled = False
@@ -152,7 +157,23 @@ class JanusProGenerator(ImageGenerator):
         
     def load_model(self) -> None:
         """Load Janus-Pro model and processor."""
-        from transformers import AutoModelForCausalLM
+        from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+        
+        # Configure quantization if requested
+        quantization_config = None
+        if self.load_in_4bit:
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+            print("Using 4-bit quantization (NF4)")
+        elif self.load_in_8bit:
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+            )
+            print("Using 8-bit quantization")
         
         # Try to import Janus-specific modules
         try:
@@ -164,11 +185,19 @@ class JanusProGenerator(ImageGenerator):
             )
             self.tokenizer = self.vl_chat_processor.tokenizer
             
-            # Load model
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name_or_path,
-                trust_remote_code=True,
-            )
+            # Load model with optional quantization
+            if quantization_config is not None:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name_or_path,
+                    trust_remote_code=True,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                )
+            else:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name_or_path,
+                    trust_remote_code=True,
+                )
             
         except ImportError:
             # Fallback: Load with transformers only
@@ -183,17 +212,33 @@ class JanusProGenerator(ImageGenerator):
             )
             self.tokenizer = self.vl_chat_processor.tokenizer
             
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_name_or_path,
-                trust_remote_code=True,
-                torch_dtype=self.dtype,
-            )
+            # Load model with optional quantization
+            if quantization_config is not None:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name_or_path,
+                    trust_remote_code=True,
+                    quantization_config=quantization_config,
+                    device_map="auto",
+                )
+            else:
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    self.model_name_or_path,
+                    trust_remote_code=True,
+                    torch_dtype=self.dtype,
+                )
         
-        # Move to device
-        self.model = self.model.to(self.dtype).to(self.device).eval()
+        # Move to device (skip if using quantization with device_map)
+        if quantization_config is None:
+            self.model = self.model.to(self.dtype).to(self.device).eval()
+        else:
+            self.model = self.model.eval()
         
         print(f"Loaded Janus-Pro from {self.model_name_or_path}")
         print(f"Model dtype: {self.dtype}, Device: {self.device}")
+        if self.load_in_4bit:
+            print("Quantization: 4-bit (memory efficient)")
+        elif self.load_in_8bit:
+            print("Quantization: 8-bit")
         
     def generate(
         self,
