@@ -121,8 +121,9 @@ logs/
 wandb/
 mlruns/
 
-# Data
-data/
+# Data (ignore large data files but keep prompts)
+data/*
+!data/prompts/
 datasets/
 *.h5
 *.hdf5
