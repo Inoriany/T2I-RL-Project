@@ -237,9 +237,16 @@ class JanusProGenerator(ImageGenerator):
             self.model = self.model.to(self.dtype).to(self.device).eval()
         else:
             self.model = self.model.eval()
+            # Fix dtype mismatch: convert vision decoder to float16
+            # The gen_vision_model is used for decoding and may have inconsistent dtypes
+            if hasattr(self.model, 'gen_vision_model'):
+                self.model.gen_vision_model = self.model.gen_vision_model.to(torch.float16)
+        
+        # Update dtype for quantized models
+        actual_dtype = torch.float16 if (self.load_in_4bit or self.load_in_8bit) else self.dtype
         
         print(f"Loaded Janus-Pro from {self.model_name_or_path}")
-        print(f"Model dtype: {self.dtype}, Device: {self.device}")
+        print(f"Model dtype: {actual_dtype}, Device: {self.device}")
         if self.load_in_4bit:
             print("Quantization: 4-bit (memory efficient)")
         elif self.load_in_8bit:
