@@ -21,6 +21,10 @@ diffusers>=0.25.0
 open-clip-torch>=2.24.0
 timm>=0.9.12
 
+# Janus-Pro (Unified Multimodal Model)
+# Install from GitHub: pip install git+https://github.com/deepseek-ai/Janus.git
+janus @ git+https://github.com/deepseek-ai/Janus.git
+
 # Reinforcement Learning
 trl>=0.7.0  # Transformer Reinforcement Learning
 
