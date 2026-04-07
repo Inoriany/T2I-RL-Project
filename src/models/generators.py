@@ -4,14 +4,20 @@ Image Generators
 
 Base classes and implementations for text-to-image generation models.
 Supports unified multimodal models (Janus-Pro) and diffusion-based generators.
+
+Based on official implementations:
+- Janus-Pro: https://github.com/deepseek-ai/Janus
+- Diffusers: https://github.com/huggingface/diffusers
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Tuple
 from dataclasses import dataclass
+import os
 
 import torch
 import torch.nn as nn
+import numpy as np
 from PIL import Image
 
 
@@ -19,11 +25,12 @@ from PIL import Image
 class GenerationConfig:
     """Configuration for image generation."""
     num_inference_steps: int = 50
-    guidance_scale: float = 7.5
-    height: int = 512
-    width: int = 512
+    guidance_scale: float = 5.0  # CFG weight
+    height: int = 384
+    width: int = 384
     num_images_per_prompt: int = 1
     seed: Optional[int] = None
+    temperature: float = 1.0
     use_lora: bool = True
     lora_scale: float = 1.0
 
@@ -35,7 +42,7 @@ class ImageGenerator(ABC):
     This provides a unified interface for different T2I architectures:
     - Unified Multimodal LLMs (e.g., Janus-Pro)
     - Diffusion Models (e.g., Stable Diffusion, SDXL)
-    - Flow-based Models (e.g., Flux)
+    - Flow-based Models (e.g., Flux, JanusFlow)
     """
     
     def __init__(
@@ -96,17 +103,33 @@ class ImageGenerator(ABC):
         if self.model is None:
             return []
         return [p for p in self.model.parameters() if p.requires_grad]
+    
+    def train(self) -> None:
+        """Set model to training mode."""
+        if self.model is not None:
+            self.model.train()
+            
+    def eval(self) -> None:
+        """Set model to evaluation mode."""
+        if self.model is not None:
+            self.model.eval()
 
 
 class JanusProGenerator(ImageGenerator):
     """
-    Janus-Pro-1B: Unified Multimodal LLM for Text-to-Image Generation.
+    Janus-Pro: Unified Multimodal LLM for Text-to-Image Generation.
     
-    Reference: https://huggingface.co/deepseek-ai/Janus-Pro-1B
+    Reference: https://github.com/deepseek-ai/Janus
+    Paper: https://arxiv.org/abs/2501.17811
     
     Janus-Pro is a unified multimodal model that can both understand
     and generate images, making it ideal for RL-based training with
     understanding-based rewards.
+    
+    Key features:
+    - Autoregressive image generation using visual tokens
+    - Supports CFG (Classifier-Free Guidance)
+    - 384x384 image output with 576 tokens per image
     """
     
     def __init__(
@@ -118,34 +141,56 @@ class JanusProGenerator(ImageGenerator):
     ):
         super().__init__(model_name_or_path, device, dtype)
         self.use_flash_attention = use_flash_attention
-        self.processor = None
+        self.vl_chat_processor = None
+        self.tokenizer = None
         self.lora_enabled = False
+        
+        # Janus-Pro specific parameters
+        self.image_token_num_per_image = 576  # 24x24 tokens
+        self.img_size = 384
+        self.patch_size = 16
         
     def load_model(self) -> None:
         """Load Janus-Pro model and processor."""
-        from transformers import AutoModelForCausalLM, AutoProcessor
-        from peft import PeftModel, get_peft_model, LoraConfig
+        from transformers import AutoModelForCausalLM
         
-        # Load processor
-        self.processor = AutoProcessor.from_pretrained(
-            self.model_name_or_path,
-            trust_remote_code=True,
-        )
-        
-        # Load model with optimizations
-        model_kwargs = {
-            "trust_remote_code": True,
-            "torch_dtype": self.dtype,
-            "device_map": "auto" if self.device == "cuda" else None,
-        }
-        
-        if self.use_flash_attention:
-            model_kwargs["attn_implementation"] = "flash_attention_2"
+        # Try to import Janus-specific modules
+        try:
+            from janus.models import MultiModalityCausalLM, VLChatProcessor
             
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name_or_path,
-            **model_kwargs,
-        )
+            # Load processor
+            self.vl_chat_processor = VLChatProcessor.from_pretrained(
+                self.model_name_or_path
+            )
+            self.tokenizer = self.vl_chat_processor.tokenizer
+            
+            # Load model
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name_or_path,
+                trust_remote_code=True,
+            )
+            
+        except ImportError:
+            # Fallback: Load with transformers only
+            print("Warning: janus package not found. Using transformers fallback.")
+            print("Install janus: pip install git+https://github.com/deepseek-ai/Janus.git")
+            
+            from transformers import AutoProcessor
+            
+            self.vl_chat_processor = AutoProcessor.from_pretrained(
+                self.model_name_or_path,
+                trust_remote_code=True,
+            )
+            self.tokenizer = self.vl_chat_processor.tokenizer
+            
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name_or_path,
+                trust_remote_code=True,
+                torch_dtype=self.dtype,
+            )
+        
+        # Move to device
+        self.model = self.model.to(self.dtype).to(self.device).eval()
         
         print(f"Loaded Janus-Pro from {self.model_name_or_path}")
         print(f"Model dtype: {self.dtype}, Device: {self.device}")
@@ -156,7 +201,173 @@ class JanusProGenerator(ImageGenerator):
         config: Optional[GenerationConfig] = None,
         **kwargs: Any,
     ) -> List[Image.Image]:
-        """Generate images using Janus-Pro."""
+        """
+        Generate images using Janus-Pro autoregressive generation.
+        
+        Args:
+            prompt: Text prompt(s) for generation
+            config: Generation configuration
+            **kwargs: Additional arguments (parallel_size, etc.)
+            
+        Returns:
+            List of generated PIL Images
+        """
+        if self.model is None:
+            raise RuntimeError("Model not loaded. Call load_model() first.")
+            
+        config = config or GenerationConfig()
+        
+        if isinstance(prompt, str):
+            prompt = [prompt]
+        
+        # Set random seed for reproducibility
+        if config.seed is not None:
+            torch.manual_seed(config.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(config.seed)
+            
+        all_images = []
+        
+        for p in prompt:
+            images = self._generate_single(
+                prompt=p,
+                temperature=config.temperature,
+                cfg_weight=config.guidance_scale,
+                parallel_size=config.num_images_per_prompt,
+                **kwargs,
+            )
+            all_images.extend(images)
+            
+        return all_images
+    
+    @torch.inference_mode()
+    def _generate_single(
+        self,
+        prompt: str,
+        temperature: float = 1.0,
+        parallel_size: int = 1,
+        cfg_weight: float = 5.0,
+        **kwargs: Any,
+    ) -> List[Image.Image]:
+        """
+        Generate images for a single prompt using Janus-Pro.
+        
+        Based on official implementation from:
+        https://github.com/deepseek-ai/Janus/blob/main/generation_inference.py
+        """
+        # Build conversation format
+        conversation = [
+            {"role": "<|User|>", "content": prompt},
+            {"role": "<|Assistant|>", "content": ""},
+        ]
+        
+        # Apply SFT template
+        sft_format = self.vl_chat_processor.apply_sft_template_for_multi_turn_prompts(
+            conversations=conversation,
+            sft_format=self.vl_chat_processor.sft_format,
+            system_prompt="",
+        )
+        formatted_prompt = sft_format + self.vl_chat_processor.image_start_tag
+        
+        # Encode prompt
+        input_ids = self.tokenizer.encode(formatted_prompt)
+        input_ids = torch.LongTensor(input_ids)
+        
+        # Create tokens for CFG (conditional and unconditional)
+        tokens = torch.zeros((parallel_size * 2, len(input_ids)), dtype=torch.int).to(self.device)
+        for i in range(parallel_size * 2):
+            tokens[i, :] = input_ids
+            if i % 2 != 0:
+                # Unconditional: mask the prompt tokens
+                tokens[i, 1:-1] = self.vl_chat_processor.pad_id
+                
+        # Get input embeddings
+        inputs_embeds = self.model.language_model.get_input_embeddings()(tokens)
+        
+        # Autoregressive generation
+        generated_tokens = torch.zeros(
+            (parallel_size, self.image_token_num_per_image), 
+            dtype=torch.int
+        ).to(self.device)
+        
+        past_key_values = None
+        
+        for i in range(self.image_token_num_per_image):
+            outputs = self.model.language_model.model(
+                inputs_embeds=inputs_embeds,
+                use_cache=True,
+                past_key_values=past_key_values if i != 0 else None,
+            )
+            past_key_values = outputs.past_key_values
+            hidden_states = outputs.last_hidden_state
+            
+            # Get logits from generation head
+            logits = self.model.gen_head(hidden_states[:, -1, :])
+            
+            # Apply CFG
+            logit_cond = logits[0::2, :]
+            logit_uncond = logits[1::2, :]
+            logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
+            
+            # Sample next token
+            probs = torch.softmax(logits / temperature, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            generated_tokens[:, i] = next_token.squeeze(dim=-1)
+            
+            # Prepare next input
+            next_token = torch.cat(
+                [next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)], 
+                dim=1
+            ).view(-1)
+            img_embeds = self.model.prepare_gen_img_embeds(next_token)
+            inputs_embeds = img_embeds.unsqueeze(dim=1)
+            
+        # Decode generated tokens to images
+        images = self._decode_tokens_to_images(generated_tokens, parallel_size)
+        
+        return images
+    
+    def _decode_tokens_to_images(
+        self, 
+        generated_tokens: torch.Tensor,
+        parallel_size: int,
+    ) -> List[Image.Image]:
+        """Decode visual tokens back to PIL Images."""
+        # Use the generation vision model to decode
+        dec = self.model.gen_vision_model.decode_code(
+            generated_tokens.to(dtype=torch.int),
+            shape=[
+                parallel_size, 
+                8, 
+                self.img_size // self.patch_size,
+                self.img_size // self.patch_size
+            ]
+        )
+        
+        # Convert to numpy
+        dec = dec.to(torch.float32).cpu().numpy().transpose(0, 2, 3, 1)
+        dec = np.clip((dec + 1) / 2 * 255, 0, 255).astype(np.uint8)
+        
+        # Convert to PIL Images
+        images = []
+        for i in range(parallel_size):
+            img = Image.fromarray(dec[i])
+            images.append(img)
+            
+        return images
+    
+    def generate_with_logprobs(
+        self,
+        prompt: Union[str, List[str]],
+        config: Optional[GenerationConfig] = None,
+        **kwargs: Any,
+    ) -> Tuple[List[Image.Image], torch.Tensor]:
+        """
+        Generate images and return log probabilities for RL training.
+        
+        Returns:
+            Tuple of (images, log_probs) where log_probs has shape (batch_size,)
+        """
         if self.model is None:
             raise RuntimeError("Model not loaded. Call load_model() first.")
             
@@ -165,45 +376,105 @@ class JanusProGenerator(ImageGenerator):
         if isinstance(prompt, str):
             prompt = [prompt]
             
-        # Set random seed for reproducibility
-        if config.seed is not None:
-            torch.manual_seed(config.seed)
-            
-        # Prepare inputs
-        images = []
+        all_images = []
+        all_log_probs = []
+        
         for p in prompt:
-            # Format prompt for image generation
-            formatted_prompt = f"Generate an image: {p}"
+            images, log_probs = self._generate_with_logprobs_single(
+                prompt=p,
+                temperature=config.temperature,
+                cfg_weight=config.guidance_scale,
+                parallel_size=config.num_images_per_prompt,
+                **kwargs,
+            )
+            all_images.extend(images)
+            all_log_probs.append(log_probs)
             
-            inputs = self.processor(
-                text=formatted_prompt,
-                return_tensors="pt",
-            ).to(self.device)
-            
-            # Generate
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=kwargs.get("max_new_tokens", 4096),
-                    do_sample=True,
-                    temperature=kwargs.get("temperature", 1.0),
-                )
-            
-            # Decode image from outputs
-            # Note: Actual implementation depends on Janus-Pro's output format
-            generated_image = self._decode_image(outputs)
-            images.append(generated_image)
-            
-        return images
+        return all_images, torch.cat(all_log_probs)
     
-    def _decode_image(self, outputs: torch.Tensor) -> Image.Image:
-        """Decode model outputs to PIL Image."""
-        # Placeholder - actual implementation depends on model architecture
-        # This would decode the visual tokens back to an image
-        raise NotImplementedError(
-            "Image decoding implementation depends on Janus-Pro architecture. "
-            "See the official Janus-Pro repository for details."
+    @torch.inference_mode()
+    def _generate_with_logprobs_single(
+        self,
+        prompt: str,
+        temperature: float = 1.0,
+        parallel_size: int = 1,
+        cfg_weight: float = 5.0,
+        **kwargs: Any,
+    ) -> Tuple[List[Image.Image], torch.Tensor]:
+        """Generate with log probability tracking for RL."""
+        # Similar to _generate_single but track log probs
+        conversation = [
+            {"role": "<|User|>", "content": prompt},
+            {"role": "<|Assistant|>", "content": ""},
+        ]
+        
+        sft_format = self.vl_chat_processor.apply_sft_template_for_multi_turn_prompts(
+            conversations=conversation,
+            sft_format=self.vl_chat_processor.sft_format,
+            system_prompt="",
         )
+        formatted_prompt = sft_format + self.vl_chat_processor.image_start_tag
+        
+        input_ids = self.tokenizer.encode(formatted_prompt)
+        input_ids = torch.LongTensor(input_ids)
+        
+        tokens = torch.zeros((parallel_size * 2, len(input_ids)), dtype=torch.int).to(self.device)
+        for i in range(parallel_size * 2):
+            tokens[i, :] = input_ids
+            if i % 2 != 0:
+                tokens[i, 1:-1] = self.vl_chat_processor.pad_id
+                
+        inputs_embeds = self.model.language_model.get_input_embeddings()(tokens)
+        
+        generated_tokens = torch.zeros(
+            (parallel_size, self.image_token_num_per_image), 
+            dtype=torch.int
+        ).to(self.device)
+        
+        # Track log probabilities
+        log_probs_list = []
+        past_key_values = None
+        
+        for i in range(self.image_token_num_per_image):
+            outputs = self.model.language_model.model(
+                inputs_embeds=inputs_embeds,
+                use_cache=True,
+                past_key_values=past_key_values if i != 0 else None,
+            )
+            past_key_values = outputs.past_key_values
+            hidden_states = outputs.last_hidden_state
+            
+            logits = self.model.gen_head(hidden_states[:, -1, :])
+            
+            # Apply CFG
+            logit_cond = logits[0::2, :]
+            logit_uncond = logits[1::2, :]
+            logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
+            
+            # Compute log probs before sampling
+            log_probs = torch.log_softmax(logits / temperature, dim=-1)
+            probs = torch.exp(log_probs)
+            
+            next_token = torch.multinomial(probs, num_samples=1)
+            generated_tokens[:, i] = next_token.squeeze(dim=-1)
+            
+            # Get log prob of selected token
+            selected_log_probs = log_probs.gather(1, next_token).squeeze(-1)
+            log_probs_list.append(selected_log_probs)
+            
+            next_token = torch.cat(
+                [next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)], 
+                dim=1
+            ).view(-1)
+            img_embeds = self.model.prepare_gen_img_embeds(next_token)
+            inputs_embeds = img_embeds.unsqueeze(dim=1)
+            
+        # Sum log probs across all tokens
+        total_log_probs = torch.stack(log_probs_list, dim=1).sum(dim=1)
+        
+        images = self._decode_tokens_to_images(generated_tokens, parallel_size)
+        
+        return images, total_log_probs
     
     def enable_lora(
         self,
@@ -227,13 +498,17 @@ class JanusProGenerator(ImageGenerator):
                 self.model,
                 lora_path,
             )
+            print(f"Loaded LoRA weights from {lora_path}")
         else:
             # Create new LoRA adapter
             default_config = {
                 "r": 16,
                 "lora_alpha": 32,
                 "lora_dropout": 0.05,
-                "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj"],
+                "target_modules": [
+                    "q_proj", "v_proj", "k_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj"
+                ],
                 "task_type": TaskType.CAUSAL_LM,
             }
             if lora_config:
@@ -241,6 +516,7 @@ class JanusProGenerator(ImageGenerator):
                 
             peft_config = LoraConfig(**default_config)
             self.model = get_peft_model(self.model, peft_config)
+            print("Created new LoRA adapter")
             
         self.lora_enabled = True
         self.model.print_trainable_parameters()
@@ -250,6 +526,12 @@ class JanusProGenerator(ImageGenerator):
         if hasattr(self.model, "disable_adapter"):
             self.model.disable_adapter()
         self.lora_enabled = False
+        
+    def save_lora(self, save_path: str) -> None:
+        """Save LoRA weights."""
+        if self.lora_enabled and hasattr(self.model, "save_pretrained"):
+            self.model.save_pretrained(save_path)
+            print(f"Saved LoRA weights to {save_path}")
 
 
 class DiffusionGenerator(ImageGenerator):
@@ -295,7 +577,13 @@ class DiffusionGenerator(ImageGenerator):
             )
             
         # Enable optimizations
-        self.pipe.enable_xformers_memory_efficient_attention()
+        try:
+            self.pipe.enable_xformers_memory_efficient_attention()
+        except Exception:
+            print("xformers not available, using default attention")
+        
+        # Store reference to model
+        self.model = self.pipe.unet
         
         print(f"Loaded diffusion model from {self.model_name_or_path}")
         
@@ -338,3 +626,9 @@ class DiffusionGenerator(ImageGenerator):
         """Unload LoRA weights."""
         self.pipe.unfuse_lora()
         self.pipe.unload_lora_weights()
+        
+    def get_trainable_parameters(self) -> List[nn.Parameter]:
+        """Get trainable UNet parameters."""
+        if self.pipe is None:
+            return []
+        return [p for p in self.pipe.unet.parameters() if p.requires_grad]
