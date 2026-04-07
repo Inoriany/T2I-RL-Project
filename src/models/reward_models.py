@@ -331,8 +331,12 @@ Respond with ONLY a JSON object in this format:
             return self._call_openai_api(img_base64, prompt)
         elif self.api_model and "claude" in self.api_model.lower():
             return self._call_anthropic_api(img_base64, prompt)
+        elif self.api_model and "gemini" in self.api_model.lower():
+            return self._call_gemini_api(img_base64, prompt)
+        elif self.api_model and ("qwen" in self.api_model.lower() or "glm" in self.api_model.lower() or "silicon" in self.api_model.lower()):
+            return self._call_siliconflow_api(img_base64, prompt)
         else:
-            raise ValueError(f"Unknown API model: {self.api_model}")
+            raise ValueError(f"Unknown API model: {self.api_model}. Supported: gpt, claude, gemini, qwen/glm (siliconflow)")
             
     def _call_openai_api(self, img_base64: str, prompt: str) -> str:
         """Call OpenAI GPT-4V API."""
@@ -389,6 +393,83 @@ Respond with ONLY a JSON object in this format:
         )
         
         return response.content[0].text
+    
+    def _call_gemini_api(self, img_base64: str, prompt: str) -> str:
+        """Call Google Gemini API (FREE tier available)."""
+        import google.generativeai as genai
+        import os
+        
+        # Configure API key
+        api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("Please set GOOGLE_API_KEY or GEMINI_API_KEY environment variable")
+        genai.configure(api_key=api_key)
+        
+        # Create model - use gemini-1.5-flash for free tier (fast & cheap)
+        model_name = self.api_model if "gemini" in self.api_model else "gemini-1.5-flash"
+        model = genai.GenerativeModel(model_name)
+        
+        # Prepare image
+        import base64
+        image_data = base64.b64decode(img_base64)
+        
+        # Create content with image and prompt
+        response = model.generate_content([
+            {
+                "mime_type": "image/png",
+                "data": image_data
+            },
+            prompt
+        ])
+        
+        return response.text
+    
+    def _call_siliconflow_api(self, img_base64: str, prompt: str) -> str:
+        """
+        Call SiliconFlow API (国产免费VLM).
+        
+        Supports models like:
+        - Qwen/Qwen2.5-VL-32B-Instruct (视觉语言模型)
+        - Qwen/Qwen2-VL-72B-Instruct (视觉语言模型)
+        - THUDM/GLM-4.1V-9B-Thinking (免费)
+        
+        Get API key at: https://cloud.siliconflow.cn/
+        """
+        from openai import OpenAI
+        import os
+        
+        api_key = os.environ.get("SILICONFLOW_API_KEY") or os.environ.get("SILICON_API_KEY")
+        if not api_key:
+            raise ValueError("Please set SILICONFLOW_API_KEY environment variable. Get it at https://cloud.siliconflow.cn/")
+        
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.siliconflow.cn/v1"
+        )
+        
+        # Default to Qwen2.5-VL-32B if not specified
+        model_name = self.api_model
+        if "silicon" in model_name.lower():
+            model_name = "Qwen/Qwen2.5-VL-32B-Instruct"  # 默认使用这个视觉模型
+        
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_base64}"},
+                        },
+                    ],
+                }
+            ],
+            max_tokens=500,
+        )
+        
+        return response.choices[0].message.content
         
     def _parse_reward_response(self, response: str) -> Tuple[float, Dict]:
         """Parse reward from VLM response."""

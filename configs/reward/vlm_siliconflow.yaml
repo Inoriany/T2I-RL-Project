@@ -1,0 +1,53 @@
+# VLM-based Reward Configuration (SiliconFlow - 硅基流动)
+# 国产免费 VLM API - 推荐使用！
+# Get API key at: https://cloud.siliconflow.cn/
+
+type: "vlm"
+
+vlm:
+  provider: "siliconflow"
+  # 推荐模型 (支持视觉理解):
+  # - Qwen/Qwen2.5-VL-32B-Instruct (¥1.89/M tokens, 高性价比)
+  # - Qwen/Qwen2-VL-72B-Instruct (¥4.13/M tokens, 更强大)
+  # - THUDM/GLM-4.1V-9B-Thinking (免费!)
+  model_name: "Qwen/Qwen2.5-VL-32B-Instruct"
+  
+  # API settings
+  max_retries: 3
+  timeout: 60
+  rate_limit_delay: 0.5  # SiliconFlow 限制较宽松
+  
+  # Evaluation aspects and weights
+  aspects:
+    object_presence: 0.30
+    attribute_accuracy: 0.30
+    spatial_relations: 0.25
+    overall_quality: 0.15
+  
+  # Custom evaluation prompt (null for default)
+  evaluation_prompt: |
+    请根据以下描述评估这张图像:
+    "{prompt}"
+    
+    从 0-10 分评估以下方面:
+    1. 物体存在: 所有提到的物体是否都存在？有无多余物体？(0-3分)
+    2. 属性准确: 颜色、大小、形状、纹理是否正确？(0-3分)
+    3. 空间关系: 物体之间的位置关系是否正确？(0-2分)
+    4. 整体质量: 图像质量、连贯性、自然度如何？(0-2分)
+    
+    只返回 JSON 格式:
+    {{"object_score": X, "attribute_score": X, "spatial_score": X, "quality_score": X, "total_score": X}}
+
+# Caching (to reduce API costs)
+cache:
+  enabled: true
+  cache_dir: "./cache/vlm_rewards"
+
+# SiliconFlow 价格参考 (2024):
+# - Qwen/Qwen2.5-VL-32B-Instruct: ¥1.89/M tokens (输入+输出)
+# - Qwen/Qwen2-VL-72B-Instruct: ¥4.13/M tokens
+# - THUDM/GLM-4.1V-9B-Thinking: 免费!
+# 
+# 训练成本估算 (Qwen2.5-VL-32B):
+# - 100 prompts × 4 images × 5 epochs = 2000 次调用
+# - 约 200K tokens × ¥1.89/M = ¥0.38 总成本！
