@@ -96,11 +96,11 @@ class GRPOTrainer(BaseTrainer):
         expanded_prompts = [p for p in prompts for _ in range(K)]
         
         # Generate samples and compute log probabilities
+        # NOTE: log_probs must keep gradients for policy optimization.
+        images, log_probs = self._generate_with_logprobs(expanded_prompts)
+
+        # Compute rewards without gradient tracking (reward model is fixed)
         with torch.no_grad():
-            # Generate K samples per prompt
-            images, log_probs = self._generate_with_logprobs(expanded_prompts)
-            
-            # Compute rewards
             reward_output = self.reward_model.compute_reward(images, expanded_prompts)
             rewards = reward_output.rewards  # Shape: (batch_size * K,)
             
@@ -144,16 +144,13 @@ class GRPOTrainer(BaseTrainer):
         Returns:
             Tuple of (images, log_probs)
         """
-        # This is a simplified version - actual implementation depends on model
-        # For autoregressive models (Janus-Pro), we compute log_prob of generated tokens
-        # For diffusion models, we use DDPM loss or denoising score matching
-        
-        images = self.generator.generate(prompts)
-        
-        # Compute log probabilities (model-specific)
-        # For simplicity, we'll use reconstruction loss as proxy
+        if hasattr(self.generator, "generate_with_logprobs"):
+            images, log_probs = self.generator.generate_with_logprobs(prompt=prompts)
+            return images, log_probs
+
+        # Fallback path for generators without logprob support
+        images = self.generator.generate(prompt=prompts)
         log_probs = self._compute_log_probs(prompts, images)
-        
         return images, log_probs
     
     def _compute_log_probs(

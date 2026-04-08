@@ -510,7 +510,6 @@ class JanusProGenerator(ImageGenerator):
             
         return all_images, torch.cat(all_log_probs)
     
-    @torch.inference_mode()
     def _generate_with_logprobs_single(
         self,
         prompt: str,
@@ -596,10 +595,12 @@ class JanusProGenerator(ImageGenerator):
                 img_embeds = self.model.prepare_gen_img_embeds(next_token)
                 inputs_embeds = img_embeds.unsqueeze(dim=1).to(compute_dtype)
             
-        # Sum log probs across all tokens
+        # Sum log probs across all tokens (keep graph for policy gradient)
         total_log_probs = torch.stack(log_probs_list, dim=1).sum(dim=1)
-        
-        images = self._decode_tokens_to_images(generated_tokens, parallel_size)
+
+        # Decode is only for reward evaluation; do not keep graph here
+        with torch.no_grad():
+            images = self._decode_tokens_to_images(generated_tokens, parallel_size)
         
         return images, total_log_probs
     
