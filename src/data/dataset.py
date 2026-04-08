@@ -41,15 +41,7 @@ class T2IDataset(Dataset):
         if suffix == ".json":
             with open(self.data_path) as f:
                 data = json.load(f)
-                if isinstance(data, list):
-                    if isinstance(data[0], str):
-                        # List of prompts
-                        data = [{self.prompt_key: p} for p in data]
-                    # List of dicts
-                    pass
-                elif isinstance(data, dict):
-                    # Dict with prompts key
-                    data = [{self.prompt_key: p} for p in data.get("prompts", [])]
+                data = self._normalize_prompt_data(data)
                     
         elif suffix == ".jsonl":
             data = []
@@ -79,6 +71,65 @@ class T2IDataset(Dataset):
             data = data[:self.max_samples]
             
         return data
+
+    def _normalize_prompt_data(self, raw: Any) -> List[Dict[str, Any]]:
+        """Normalize multiple JSON prompt schemas into list-of-dicts.
+
+        Supported inputs:
+        - ["prompt a", "prompt b"]
+        - [{"prompt": "..."}, ...]
+        - {"prompts": ["...", ...]}
+        - {"prompts": {"category_a": ["..."], "category_b": ["..."]}}
+        """
+        items = self._extract_prompt_items(raw)
+
+        normalized: List[Dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, str):
+                normalized.append({self.prompt_key: item})
+            elif isinstance(item, dict):
+                if self.prompt_key in item and isinstance(item[self.prompt_key], str):
+                    normalized.append(item)
+                elif "text" in item and isinstance(item["text"], str):
+                    converted = dict(item)
+                    converted[self.prompt_key] = converted.pop("text")
+                    normalized.append(converted)
+
+        return normalized
+
+    def _extract_prompt_items(self, raw: Any, category: Optional[str] = None) -> List[Any]:
+        """Recursively extract prompt-like items from nested JSON structures."""
+        if raw is None:
+            return []
+
+        if isinstance(raw, str):
+            return [{self.prompt_key: raw, "category": category} if category else raw]
+
+        if isinstance(raw, list):
+            results: List[Any] = []
+            for entry in raw:
+                results.extend(self._extract_prompt_items(entry, category=category))
+            return results
+
+        if isinstance(raw, dict):
+            if "prompts" in raw:
+                return self._extract_prompt_items(raw["prompts"], category=category)
+
+            if self.prompt_key in raw and isinstance(raw[self.prompt_key], str):
+                item = dict(raw)
+                if category and "category" not in item:
+                    item["category"] = category
+                return [item]
+
+            results = []
+            for key, value in raw.items():
+                if key in {"metadata", "meta"}:
+                    continue
+                if isinstance(value, (list, dict)):
+                    results.extend(self._extract_prompt_items(value, category=key))
+            return results
+
+        return []
         
     def __len__(self) -> int:
         return len(self.data)
