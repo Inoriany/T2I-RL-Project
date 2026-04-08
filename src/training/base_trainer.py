@@ -303,17 +303,42 @@ class BaseTrainer(ABC):
         # Load model
         if hasattr(self.generator, "load_model"):
             from peft import PeftModel
-            self.generator.model = PeftModel.from_pretrained(
-                self.generator.model,
-                checkpoint_dir,
+            try:
+                self.generator.model = PeftModel.from_pretrained(
+                    self.generator.model,
+                    checkpoint_dir,
+                    is_trainable=True,
+                )
+            except TypeError:
+                # Backward compatibility for older PEFT versions
+                self.generator.model = PeftModel.from_pretrained(
+                    self.generator.model,
+                    checkpoint_dir,
+                )
+                for name, param in self.generator.model.named_parameters():
+                    if "lora_" in name:
+                        param.requires_grad = True
+
+            trainable_count = sum(
+                1 for p in self.generator.model.parameters() if p.requires_grad
             )
+            print(f"Trainable parameters after loading checkpoint: {trainable_count}")
+
+            if hasattr(self.generator, "lora_enabled"):
+                self.generator.lora_enabled = True
+
+            # Rebuild optimizer/scheduler with current model parameters
+            self._setup_optimizer()
             
         # Load training state
         state_path = checkpoint_dir / "training_state.pt"
         if state_path.exists():
             state = torch.load(state_path)
-            self.optimizer.load_state_dict(state["optimizer"])
-            self.scheduler.load_state_dict(state["scheduler"])
+            try:
+                self.optimizer.load_state_dict(state["optimizer"])
+                self.scheduler.load_state_dict(state["scheduler"])
+            except Exception as e:
+                print(f"Warning: optimizer/scheduler state load failed, using fresh states: {e}")
             self.global_step = state["global_step"]
             self.current_epoch = state["epoch"]
             
