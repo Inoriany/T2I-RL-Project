@@ -13,10 +13,13 @@ Based on official implementations:
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any, Union, Tuple
 from dataclasses import dataclass
+from contextlib import nullcontext
+import types
 import os
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 
@@ -241,6 +244,9 @@ class JanusProGenerator(ImageGenerator):
             # The gen_vision_model is used for decoding and may have inconsistent dtypes
             if hasattr(self.model, 'gen_vision_model'):
                 self.model.gen_vision_model = self.model.gen_vision_model.to(torch.float16)
+
+        if hasattr(self.model, 'gen_vision_model'):
+            self._patch_janus_upsample_dtype()
         
         # Update dtype for quantized models
         actual_dtype = torch.float16 if (self.load_in_4bit or self.load_in_8bit) else self.dtype
@@ -251,6 +257,44 @@ class JanusProGenerator(ImageGenerator):
             print("Quantization: 4-bit (memory efficient)")
         elif self.load_in_8bit:
             print("Quantization: 8-bit")
+
+    def _get_compute_dtype(self) -> torch.dtype:
+        """Return stable compute dtype for generation/decode."""
+        if self.load_in_4bit or self.load_in_8bit:
+            return torch.float16
+        return self.dtype
+
+    def _patch_janus_upsample_dtype(self) -> None:
+        """Patch Janus Upsample to preserve input dtype.
+
+        Janus VQ Upsample hard-casts interpolated tensors to bfloat16, which can
+        mismatch decoder conv bias dtype (often float16) and crash with:
+        "Input type (BFloat16) and bias type (Half) should be the same".
+        """
+
+        def _patched_forward(module_self, x):
+            target_dtype = x.dtype
+            if target_dtype != torch.float32:
+                x = F.interpolate(
+                    x.to(torch.float32),
+                    scale_factor=2.0,
+                    mode="nearest",
+                ).to(target_dtype)
+            else:
+                x = F.interpolate(x, scale_factor=2.0, mode="nearest")
+
+            if module_self.with_conv:
+                x = module_self.conv(x)
+            return x
+
+        patched_count = 0
+        for module in self.model.gen_vision_model.modules():
+            if module.__class__.__name__ == "Upsample" and hasattr(module, "with_conv"):
+                module.forward = types.MethodType(_patched_forward, module)
+                patched_count += 1
+
+        if patched_count > 0:
+            print(f"Patched {patched_count} Janus Upsample layer(s) for dtype safety")
         
     def generate(
         self,
@@ -340,6 +384,8 @@ class JanusProGenerator(ImageGenerator):
                 
         # Get input embeddings
         inputs_embeds = self.model.language_model.get_input_embeddings()(tokens)
+        compute_dtype = self._get_compute_dtype()
+        inputs_embeds = inputs_embeds.to(compute_dtype)
         
         # Autoregressive generation
         generated_tokens = torch.zeros(
@@ -349,35 +395,42 @@ class JanusProGenerator(ImageGenerator):
         
         past_key_values = None
         
-        for i in range(self.image_token_num_per_image):
-            outputs = self.model.language_model.model(
-                inputs_embeds=inputs_embeds,
-                use_cache=True,
-                past_key_values=past_key_values if i != 0 else None,
-            )
-            past_key_values = outputs.past_key_values
-            hidden_states = outputs.last_hidden_state
-            
-            # Get logits from generation head
-            logits = self.model.gen_head(hidden_states[:, -1, :])
-            
-            # Apply CFG
-            logit_cond = logits[0::2, :]
-            logit_uncond = logits[1::2, :]
-            logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
-            
-            # Sample next token
-            probs = torch.softmax(logits / temperature, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
-            generated_tokens[:, i] = next_token.squeeze(dim=-1)
-            
-            # Prepare next input
-            next_token = torch.cat(
-                [next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)], 
-                dim=1
-            ).view(-1)
-            img_embeds = self.model.prepare_gen_img_embeds(next_token)
-            inputs_embeds = img_embeds.unsqueeze(dim=1)
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", dtype=compute_dtype)
+            if self.device.startswith("cuda")
+            else nullcontext()
+        )
+
+        with autocast_ctx:
+            for i in range(self.image_token_num_per_image):
+                outputs = self.model.language_model.model(
+                    inputs_embeds=inputs_embeds,
+                    use_cache=True,
+                    past_key_values=past_key_values if i != 0 else None,
+                )
+                past_key_values = outputs.past_key_values
+                hidden_states = outputs.last_hidden_state
+
+                # Get logits from generation head
+                logits = self.model.gen_head(hidden_states[:, -1, :])
+
+                # Apply CFG
+                logit_cond = logits[0::2, :]
+                logit_uncond = logits[1::2, :]
+                logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
+
+                # Sample next token
+                probs = torch.softmax(logits / temperature, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+                generated_tokens[:, i] = next_token.squeeze(dim=-1)
+
+                # Prepare next input
+                next_token = torch.cat(
+                    [next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)],
+                    dim=1
+                ).view(-1)
+                img_embeds = self.model.prepare_gen_img_embeds(next_token)
+                inputs_embeds = img_embeds.unsqueeze(dim=1).to(compute_dtype)
             
         # Decode generated tokens to images
         images = self._decode_tokens_to_images(generated_tokens, parallel_size)
@@ -391,15 +444,23 @@ class JanusProGenerator(ImageGenerator):
     ) -> List[Image.Image]:
         """Decode visual tokens back to PIL Images."""
         # Use the generation vision model to decode
-        dec = self.model.gen_vision_model.decode_code(
-            generated_tokens.to(dtype=torch.int),
-            shape=[
-                parallel_size, 
-                8, 
-                self.img_size // self.patch_size,
-                self.img_size // self.patch_size
-            ]
+        compute_dtype = self._get_compute_dtype()
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", dtype=compute_dtype)
+            if self.device.startswith("cuda")
+            else nullcontext()
         )
+
+        with autocast_ctx:
+            dec = self.model.gen_vision_model.decode_code(
+                generated_tokens.to(dtype=torch.int),
+                shape=[
+                    parallel_size,
+                    8,
+                    self.img_size // self.patch_size,
+                    self.img_size // self.patch_size
+                ]
+            )
         
         # Convert to numpy
         dec = dec.to(torch.float32).cpu().numpy().transpose(0, 2, 3, 1)
@@ -482,6 +543,8 @@ class JanusProGenerator(ImageGenerator):
                 tokens[i, 1:-1] = self.vl_chat_processor.pad_id
                 
         inputs_embeds = self.model.language_model.get_input_embeddings()(tokens)
+        compute_dtype = self._get_compute_dtype()
+        inputs_embeds = inputs_embeds.to(compute_dtype)
         
         generated_tokens = torch.zeros(
             (parallel_size, self.image_token_num_per_image), 
@@ -492,39 +555,46 @@ class JanusProGenerator(ImageGenerator):
         log_probs_list = []
         past_key_values = None
         
-        for i in range(self.image_token_num_per_image):
-            outputs = self.model.language_model.model(
-                inputs_embeds=inputs_embeds,
-                use_cache=True,
-                past_key_values=past_key_values if i != 0 else None,
-            )
-            past_key_values = outputs.past_key_values
-            hidden_states = outputs.last_hidden_state
-            
-            logits = self.model.gen_head(hidden_states[:, -1, :])
-            
-            # Apply CFG
-            logit_cond = logits[0::2, :]
-            logit_uncond = logits[1::2, :]
-            logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
-            
-            # Compute log probs before sampling
-            log_probs = torch.log_softmax(logits / temperature, dim=-1)
-            probs = torch.exp(log_probs)
-            
-            next_token = torch.multinomial(probs, num_samples=1)
-            generated_tokens[:, i] = next_token.squeeze(dim=-1)
-            
-            # Get log prob of selected token
-            selected_log_probs = log_probs.gather(1, next_token).squeeze(-1)
-            log_probs_list.append(selected_log_probs)
-            
-            next_token = torch.cat(
-                [next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)], 
-                dim=1
-            ).view(-1)
-            img_embeds = self.model.prepare_gen_img_embeds(next_token)
-            inputs_embeds = img_embeds.unsqueeze(dim=1)
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", dtype=compute_dtype)
+            if self.device.startswith("cuda")
+            else nullcontext()
+        )
+
+        with autocast_ctx:
+            for i in range(self.image_token_num_per_image):
+                outputs = self.model.language_model.model(
+                    inputs_embeds=inputs_embeds,
+                    use_cache=True,
+                    past_key_values=past_key_values if i != 0 else None,
+                )
+                past_key_values = outputs.past_key_values
+                hidden_states = outputs.last_hidden_state
+
+                logits = self.model.gen_head(hidden_states[:, -1, :])
+
+                # Apply CFG
+                logit_cond = logits[0::2, :]
+                logit_uncond = logits[1::2, :]
+                logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
+
+                # Compute log probs before sampling
+                log_probs = torch.log_softmax(logits / temperature, dim=-1)
+                probs = torch.exp(log_probs)
+
+                next_token = torch.multinomial(probs, num_samples=1)
+                generated_tokens[:, i] = next_token.squeeze(dim=-1)
+
+                # Get log prob of selected token
+                selected_log_probs = log_probs.gather(1, next_token).squeeze(-1)
+                log_probs_list.append(selected_log_probs)
+
+                next_token = torch.cat(
+                    [next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)],
+                    dim=1
+                ).view(-1)
+                img_embeds = self.model.prepare_gen_img_embeds(next_token)
+                inputs_embeds = img_embeds.unsqueeze(dim=1).to(compute_dtype)
             
         # Sum log probs across all tokens
         total_log_probs = torch.stack(log_probs_list, dim=1).sum(dim=1)
