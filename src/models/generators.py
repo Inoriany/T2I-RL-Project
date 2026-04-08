@@ -518,49 +518,75 @@ class JanusProGenerator(ImageGenerator):
         cfg_weight: float = 5.0,
         **kwargs: Any,
     ) -> Tuple[List[Image.Image], torch.Tensor]:
-        """Generate with log probability tracking for RL."""
-        # Similar to _generate_single but track log probs
+        """
+        Generate images with log-probability tracking for RL training.
+
+        Uses a two-phase REINFORCE-style approach to avoid OOM:
+
+        Phase 1 (Generation) — ``torch.no_grad()``:
+            Run the full 576-step autoregressive loop *without* gradients.
+            This is identical to ``_generate_single`` but we also save the
+            sampled token ids.
+
+        Phase 2 (Scoring) — with gradients, single forward pass:
+            Re-embed the *already-sampled* token sequence and do a single
+            forward pass through the language model (with the prompt KV
+            cached) to recompute the log-probabilities of those tokens.
+            Only this pass builds a computation graph, so peak VRAM is
+            ~1 forward pass worth of activations instead of 576x.
+
+        The policy-gradient estimator  ``∇J = E[A * ∇ log π(a|s)]``  only
+        needs ``log π`` to carry gradients — it does *not* need the sampling
+        step itself to be differentiable.  So this decomposition is
+        mathematically equivalent to the old single-loop implementation.
+        """
+        # -----------------------------------------------------------
+        # Shared: build prompt tokens & CFG pair
+        # -----------------------------------------------------------
         conversation = [
             {"role": "<|User|>", "content": prompt},
             {"role": "<|Assistant|>", "content": ""},
         ]
-        
+
         sft_format = self.vl_chat_processor.apply_sft_template_for_multi_turn_prompts(
             conversations=conversation,
             sft_format=self.vl_chat_processor.sft_format,
             system_prompt="",
         )
         formatted_prompt = sft_format + self.vl_chat_processor.image_start_tag
-        
+
         input_ids = self.tokenizer.encode(formatted_prompt)
         input_ids = torch.LongTensor(input_ids)
-        
-        tokens = torch.zeros((parallel_size * 2, len(input_ids)), dtype=torch.int).to(self.device)
+
+        tokens = torch.zeros(
+            (parallel_size * 2, len(input_ids)), dtype=torch.int
+        ).to(self.device)
         for i in range(parallel_size * 2):
             tokens[i, :] = input_ids
             if i % 2 != 0:
                 tokens[i, 1:-1] = self.vl_chat_processor.pad_id
-                
-        inputs_embeds = self.model.language_model.get_input_embeddings()(tokens)
+
         compute_dtype = self._get_compute_dtype()
-        inputs_embeds = inputs_embeds.to(compute_dtype)
-        
+
+        # =========================================================
+        # PHASE 1 — Generation (no gradients, low VRAM)
+        # =========================================================
         generated_tokens = torch.zeros(
-            (parallel_size, self.image_token_num_per_image), 
-            dtype=torch.int
+            (parallel_size, self.image_token_num_per_image),
+            dtype=torch.int,
         ).to(self.device)
-        
-        # Track log probabilities
-        log_probs_list = []
-        past_key_values = None
-        
+
         autocast_ctx = (
             torch.autocast(device_type="cuda", dtype=compute_dtype)
             if self.device.startswith("cuda")
             else nullcontext()
         )
 
-        with autocast_ctx:
+        with torch.no_grad(), autocast_ctx:
+            inputs_embeds = self.model.language_model.get_input_embeddings()(tokens)
+            inputs_embeds = inputs_embeds.to(compute_dtype)
+            past_key_values = None
+
             for i in range(self.image_token_num_per_image):
                 outputs = self.model.language_model.model(
                     inputs_embeds=inputs_embeds,
@@ -572,36 +598,115 @@ class JanusProGenerator(ImageGenerator):
 
                 logits = self.model.gen_head(hidden_states[:, -1, :])
 
-                # Apply CFG
+                # CFG
                 logit_cond = logits[0::2, :]
                 logit_uncond = logits[1::2, :]
                 logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
 
-                # Compute log probs before sampling
-                log_probs = torch.log_softmax(logits / temperature, dim=-1)
-                probs = torch.exp(log_probs)
-
+                probs = torch.softmax(logits / temperature, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
                 generated_tokens[:, i] = next_token.squeeze(dim=-1)
 
-                # Get log prob of selected token
-                selected_log_probs = log_probs.gather(1, next_token).squeeze(-1)
-                log_probs_list.append(selected_log_probs)
-
-                next_token = torch.cat(
+                # Prepare next step embedding
+                next_token_cfg = torch.cat(
                     [next_token.unsqueeze(dim=1), next_token.unsqueeze(dim=1)],
-                    dim=1
+                    dim=1,
                 ).view(-1)
-                img_embeds = self.model.prepare_gen_img_embeds(next_token)
+                img_embeds = self.model.prepare_gen_img_embeds(next_token_cfg)
                 inputs_embeds = img_embeds.unsqueeze(dim=1).to(compute_dtype)
-            
-        # Sum log probs across all tokens (keep graph for policy gradient)
-        total_log_probs = torch.stack(log_probs_list, dim=1).sum(dim=1)
 
-        # Decode is only for reward evaluation; do not keep graph here
+            # Free KV cache immediately
+            del past_key_values, outputs, hidden_states, inputs_embeds
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        # Decode tokens -> PIL images (no grad needed)
         with torch.no_grad():
             images = self._decode_tokens_to_images(generated_tokens, parallel_size)
-        
+
+        # =========================================================
+        # PHASE 2 — Scoring (single forward pass with gradients)
+        # =========================================================
+        # Strategy: cache the prompt KV (no grad), then do ONE forward
+        # pass over all 576 image-token embeddings with gradients.
+        # This is only 576 tokens — far smaller than the 576-step
+        # autoregressive loop that previously built a massive graph.
+        # Peak VRAM ≈ 1 forward pass of activations, which fits on L4.
+        # ---------------------------------------------------------
+
+        # 2-a  Prompt KV cache (no grad — prompt is not trained)
+        with torch.no_grad(), autocast_ctx:
+            prompt_embeds = self.model.language_model.get_input_embeddings()(tokens)
+            prompt_embeds = prompt_embeds.to(compute_dtype)
+            prompt_out = self.model.language_model.model(
+                inputs_embeds=prompt_embeds,
+                use_cache=True,
+            )
+            prompt_kv = prompt_out.past_key_values
+            del prompt_out
+
+        # 2-b  Build CFG-paired image-token ids
+        # generated_tokens: (parallel_size, 576) int
+        # We need CFG interleaving: [cond_0, uncond_0, cond_1, uncond_1, ...]
+        gen_tok_flat_cfg = torch.cat(
+            [generated_tokens, generated_tokens], dim=0
+        )  # (parallel_size*2, 576)
+        interleaved_idx = torch.zeros(
+            parallel_size * 2, dtype=torch.long, device=self.device
+        )
+        for s in range(parallel_size):
+            interleaved_idx[2 * s] = s
+            interleaved_idx[2 * s + 1] = s + parallel_size
+        gen_tok_cfg = gen_tok_flat_cfg[interleaved_idx]  # (P*2, 576)
+
+        total_img_tokens = self.image_token_num_per_image  # 576
+
+        # 2-c  Single forward pass with gradients
+        with autocast_ctx:
+            all_img_embeds = self.model.prepare_gen_img_embeds(
+                gen_tok_cfg.reshape(-1)
+            )
+            embed_dim = all_img_embeds.shape[-1]
+            all_img_embeds = all_img_embeds.view(
+                parallel_size * 2, total_img_tokens, embed_dim
+            ).to(compute_dtype)
+
+            scoring_out = self.model.language_model.model(
+                inputs_embeds=all_img_embeds,
+                use_cache=False,
+                past_key_values=prompt_kv,
+            )
+            hidden = scoring_out.last_hidden_state  # (P*2, 576, dim)
+
+            # gen_head at position j predicts token j+1.
+            # hidden[:, 0..574, :] -> predictions for tokens 1..575.
+            # We skip token 0 (losing 1/576 ~ 0.2% — negligible).
+            pred_hidden = hidden[:, :-1, :]       # (P*2, 575, dim)
+            logits = self.model.gen_head(pred_hidden)  # (P*2, 575, vocab)
+
+            # Apply CFG to logits
+            logit_cond = logits[0::2, :, :]       # (P, 575, vocab)
+            logit_uncond = logits[1::2, :, :]     # (P, 575, vocab)
+            cfg_logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
+
+            # Log-probs of the actually-sampled tokens
+            log_probs_all = torch.log_softmax(
+                cfg_logits / temperature, dim=-1
+            )  # (P, 575, vocab)
+
+            target_tokens = generated_tokens[:, 1:]  # (P, 575)
+            selected_log_probs = log_probs_all.gather(
+                2, target_tokens.unsqueeze(-1).long()
+            ).squeeze(-1)  # (P, 575)
+
+            total_log_probs = selected_log_probs.sum(dim=1)  # (P,)
+
+        # Clean up
+        del scoring_out, hidden, pred_hidden, logits, log_probs_all
+        del prompt_kv, all_img_embeds, gen_tok_cfg, gen_tok_flat_cfg
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         return images, total_log_probs
     
     def enable_lora(
