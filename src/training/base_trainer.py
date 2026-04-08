@@ -197,6 +197,9 @@ class BaseTrainer(ABC):
         )
         
         for step, batch in enumerate(progress_bar):
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             # Compute loss
             loss_dict = self.compute_loss(batch)
             loss = loss_dict["loss"] / self.config.gradient_accumulation_steps

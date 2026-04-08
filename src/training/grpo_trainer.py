@@ -63,7 +63,11 @@ class GRPOTrainer(BaseTrainer):
         
         # Reference model for KL computation (frozen copy of initial policy)
         self.ref_model = None
-        self._setup_reference_model()
+        if self.grpo_config.kl_coef > 0 or self.grpo_config.target_kl is not None:
+            self._setup_reference_model()
+        else:
+            # Skip reference model to save GPU memory when KL is disabled
+            self.ref_model = None
         
     def _setup_reference_model(self) -> None:
         """Create frozen reference model for KL computation."""
@@ -209,6 +213,9 @@ class GRPOTrainer(BaseTrainer):
         
         KL(π || π_ref) = E[log π(a|s) - log π_ref(a|s)]
         """
+        if self.ref_model is None or self.grpo_config.kl_coef <= 0:
+            return torch.tensor(0.0, device=self.device)
+
         # Current policy log probs
         current_log_probs = self._compute_log_probs(prompts, images)
         
@@ -226,6 +233,8 @@ class GRPOTrainer(BaseTrainer):
         images: List[Image.Image],
     ) -> torch.Tensor:
         """Compute log probs using reference model."""
+        if self.ref_model is None:
+            return torch.zeros(len(prompts), device=self.device)
         # Placeholder - use reference model for computation
         return torch.zeros(len(prompts), device=self.device)
 
