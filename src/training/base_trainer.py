@@ -169,10 +169,15 @@ class BaseTrainer(ABC):
     
     def train(self) -> None:
         """Main training loop."""
+        start_epoch = self.current_epoch if self.global_step > 0 else 0
+        remaining_epochs = max(self.config.num_epochs - start_epoch, 0)
+
         print(f"Starting training for {self.config.num_epochs} epochs")
-        print(f"Total steps: {len(self.train_dataloader) * self.config.num_epochs}")
-        
-        for epoch in range(self.config.num_epochs):
+        if start_epoch > 0:
+            print(f"Resuming from epoch {start_epoch}, global step {self.global_step}")
+        print(f"Total steps (remaining): {len(self.train_dataloader) * remaining_epochs}")
+
+        for epoch in range(start_epoch, self.config.num_epochs):
             self.current_epoch = epoch
             self._train_epoch()
             
@@ -285,7 +290,7 @@ class BaseTrainer(ABC):
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
             "global_step": self.global_step,
-            "epoch": self.current_epoch,
+            "epoch": self.current_epoch + 1 if name.startswith("checkpoint-epoch-") else self.current_epoch,
             "config": vars(self.config),
         }, checkpoint_dir / "training_state.pt")
         
