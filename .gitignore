@@ -156,3 +156,7 @@ secrets.json
 *.tar.gz
 *.tar
 *.rar
+
+# Allow trained LoRA weights for reproducibility
+!assets/trained_lora/*.safetensors
+!assets/trained_lora/*.json
