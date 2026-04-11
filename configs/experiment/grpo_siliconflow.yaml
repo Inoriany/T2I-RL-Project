@@ -1,0 +1,108 @@
+# @package _global_
+# ============================================================================
+# Main Training Configuration: GRPO + SiliconFlow VLM Reward
+# ============================================================================
+# Purpose : Full-scale training for final project results
+# Usage   : python scripts/train.py --config-name experiment/grpo_siliconflow
+# Data    : 1029 prompts — core compositional categories ~100 each
+#           (color/spatial/counting/attribute/shape/texture/non_spatial/complex/multi_object)
+# Reward  : CLIP (0.3) + SiliconFlow Qwen2.5-VL-32B (0.7)
+# Estimate: ~10-14 hours on 24GB GPU | API cost ~¥15-20 total
+#
+# Prerequisites:
+#   export SILICONFLOW_API_KEY=<your_key>   # https://cloud.siliconflow.cn/
+#   (Optional) export WANDB_API_KEY=<your_key>
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: composite_siliconflow
+  - _self_
+
+experiment:
+  name: "grpo_siliconflow"
+  description: "Full GRPO training with composite CLIP+SiliconFlow VLM reward on 620 prompts"
+  tags: ["grpo", "siliconflow", "composite", "vlm", "full_training"]
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model:
+  model_path: "deepseek-ai/Janus-Pro-1B"
+  dtype: "bfloat16"
+  use_flash_attention: true
+
+  lora:
+    enabled: true
+    r: 16           # Balanced capacity vs. memory
+    alpha: 32
+    dropout: 0.05
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+      - "k_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  learning_rate: 1e-5
+  num_epochs: 10
+  batch_size: 2
+  gradient_accumulation_steps: 8    # Effective batch size = 16
+  max_grad_norm: 1.0
+  weight_decay: 0.01
+
+  grpo:
+    group_size: 4                   # Generate 4 images per prompt per step
+    kl_coef: 0.01                   # KL penalty against reference model
+    normalize_rewards: true
+    use_advantage_normalization: true
+    baseline_type: "mean"           # Subtract group mean reward
+
+  warmup_steps: 100
+  lr_scheduler: "cosine"
+
+  save_steps: 300
+  eval_steps: 150
+  logging_steps: 10
+  output_dir: "./outputs/grpo_siliconflow"
+  save_total_limit: 3               # Keep last 3 checkpoints
+
+# ── Reward: already defined in composite_siliconflow.yaml ─────────────────────
+# Overrides: switch to free GLM model if quota runs out
+# reward:
+#   vlm:
+#     model_name: "THUDM/GLM-4.1V-9B-Thinking"
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+data:
+  train_file: "data/prompts/train_prompts_large.json"   # 1029 prompts
+  eval_file:  "data/prompts/val_prompts.json"           # 25 prompts
+  max_train_samples: null   # Use all 620
+  max_eval_samples: 25
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+evaluation:
+  benchmarks:
+    - "t2i_compbench"
+    - "tifa"
+    - "geneval"
+  compute_clip_score: true
+  compute_vlm_score: true
+  save_images: true
+  num_samples_per_prompt: 3
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  use_wandb: true
+  wandb_project: "t2i-rl"
+  wandb_run_name: "grpo-siliconflow-${now:%Y%m%d-%H%M%S}"
+  logging_steps: 10
+
+# ── Hardware ──────────────────────────────────────────────────────────────────
+hardware:
+  bf16: true
+  dataloader_num_workers: 4
+  seed: 42

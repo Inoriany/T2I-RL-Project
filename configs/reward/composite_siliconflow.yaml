@@ -1,0 +1,59 @@
+# Composite Reward Configuration (SiliconFlow VLM - Recommended)
+# Combines CLIP (fast pre-filtering) + SiliconFlow VLM (detailed evaluation)
+#
+# SiliconFlow API: https://cloud.siliconflow.cn/
+# Set environment variable: SILICONFLOW_API_KEY=<your_key>
+#
+# Cost estimate for full training (620 prompts × 4 images × 10 epochs):
+#   - Qwen/Qwen2.5-VL-32B-Instruct: ~¥4.7 total (recommended, best quality)
+#   - THUDM/GLM-4.1V-9B-Thinking:   FREE (lower quality, good for testing)
+
+type: "composite"
+
+# CLIP component: fast pre-filter, no API cost
+clip:
+  model_name: "ViT-L-14"
+  pretrained: "openai"
+  weight: 0.3
+
+  # Gate: only call VLM if CLIP score >= threshold (saves API calls)
+  gate_threshold: 0.18
+
+# VLM component: SiliconFlow (detailed compositional evaluation)
+vlm:
+  provider: "siliconflow"
+
+  # Options (uncomment one):
+  model_name: "Qwen/Qwen2.5-VL-32B-Instruct"   # Best quality, ~¥1.89/M tokens
+  # model_name: "THUDM/GLM-4.1V-9B-Thinking"   # Free tier, lower quality
+
+  weight: 0.7
+
+  max_retries: 3
+  timeout: 60
+  rate_limit_delay: 0.5
+
+  aspects:
+    object_presence:    0.30   # Are all mentioned objects present?
+    attribute_accuracy: 0.30   # Colors, sizes, shapes, textures correct?
+    spatial_relations:  0.25   # Positional relationships correct?
+    overall_quality:    0.15   # Image quality and coherence
+
+  evaluation_prompt: |
+    Evaluate this image against the description: "{prompt}"
+
+    Score each aspect from 0-10:
+    1. Object presence: Are all mentioned objects present without extra objects? (0-3)
+    2. Attribute accuracy: Are colors, sizes, shapes, textures correct? (0-3)
+    3. Spatial relations: Are positional relationships correct? (0-2)
+    4. Overall quality: Is the image coherent and natural? (0-2)
+
+    Return JSON only:
+    {{"object_score": X, "attribute_score": X, "spatial_score": X, "quality_score": X, "total_score": X}}
+
+aggregation: "weighted_sum"
+
+cache:
+  enabled: true
+  cache_dir: "./cache/composite_siliconflow"
+  # Cache avoids re-calling API for same (image, prompt) pairs
