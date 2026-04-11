@@ -16,6 +16,7 @@ A research framework for training text-to-image models using reinforcement learn
 - [Architecture](#architecture)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Team Workflow](#team-workflow)
 - [Documentation](#documentation)
 - [Training](#training-algorithms)
 - [Evaluation](#evaluation-benchmarks)
@@ -132,7 +133,93 @@ T2I-RL-Project/
 └── README.md
 ```
 
-## Documentation
+## Team Workflow
+
+> **Quick reference for all team members.** Full training is run on Google Colab (free T4/A100).  
+> All notebooks are self-contained — just fill in your API key in Step 0 and run all cells.
+
+### Member A — Full Training (Main Run)
+
+| Item | Value |
+|------|-------|
+| Notebook | `notebooks/colab_full_training.ipynb` |
+| Config | `configs/experiment/grpo_siliconflow.yaml` |
+| Data | `data/prompts/train_prompts_large.json` (1029 prompts) |
+| Reward | CLIP (0.3) + SiliconFlow Qwen2.5-VL-32B (0.7) |
+| Est. time | ~10-14h on 24GB GPU |
+| Est. cost | ~¥15-20 API |
+
+**Required:** Set `SILICONFLOW_API_KEY` in Step 0.  
+Get your key at [cloud.siliconflow.cn](https://cloud.siliconflow.cn/).
+
+---
+
+### Member B — Ablation Experiments
+
+Run the same `colab_full_training.ipynb` notebook, but **change `OUTPUT_DIR` and `--config-name`** in Step 0:
+
+| Ablation | Config | Change vs. Baseline |
+|----------|--------|---------------------|
+| `grpo_full_lora_r8` | `ablation_lora_r8` | LoRA rank 8 (fewer params) |
+| `grpo_full_lora_r32` | `ablation_lora_r32` | LoRA rank 32 (more params) |
+| `grpo_full_clip_only` | `ablation_clip_only` | CLIP reward only (no API cost) |
+| `grpo_full_vlm_only` | `ablation_vlm_only` | VLM reward only (no CLIP gate) |
+| `grpo_full_5ep` | `ablation_5ep` | 5 epochs instead of 10 |
+
+In Step 0 of the notebook, change:
+```python
+OUTPUT_DIR = "/content/drive/MyDrive/T2I-RL/outputs/grpo_full_lora_r8"  # match ablation name
+```
+And in Step 6 (training cell), change `--config-name`:
+```bash
+python scripts/train.py --config-name experiment/ablation_lora_r8
+```
+
+After each run, collect benchmark scores using `notebooks/evaluation_and_analysis.ipynb`.
+
+---
+
+### Member C — Qualitative Analysis
+
+Use `notebooks/evaluation_and_analysis.ipynb` with checkpoints from Member A's run.
+
+Deliverables:
+- Before/after image grids (baseline Janus-Pro vs. trained checkpoint)
+- Error taxonomy table: missing objects / wrong count / wrong attribute / wrong relation
+- Failure mode analysis (cases where reward is high but image is wrong)
+- Reward signal case study (show reward curve vs. visual quality)
+
+---
+
+### Member D — TIFA & GenAI-Bench Evaluation
+
+Reuse Member B's Colab environment. Run:
+```bash
+python scripts/evaluate.py \
+    --checkpoint /path/to/checkpoint \
+    --benchmark tifa \
+    --output_dir outputs/eval_tifa
+
+python scripts/evaluate.py \
+    --checkpoint /path/to/checkpoint \
+    --benchmark genai_bench \
+    --output_dir outputs/eval_genai
+```
+
+Also write **Background & Related Work** sections of the final report.
+
+---
+
+### SiliconFlow API Notes
+
+- **Recommended model:** `Qwen/Qwen2.5-VL-32B-Instruct` (~¥1.89/M tokens)
+- **Free alternative:** `THUDM/GLM-4.1V-9B-Thinking` (free tier, lower quality)
+- Switch models by changing `VLM_MODEL` in Step 0 of any notebook
+- Monitor usage at [cloud.siliconflow.cn/account/billing](https://cloud.siliconflow.cn/account/billing)
+
+---
+
+
 
 | Document | Description |
 |----------|-------------|
