@@ -1,0 +1,90 @@
+# @package _global_
+# ============================================================================
+# Ablation: VLM-only reward  (vs. baseline composite CLIP+VLM)
+# ============================================================================
+# Purpose : Test whether CLIP pre-filtering is necessary; pure VLM reward
+# Usage   : python scripts/train.py --config-name experiment/ablation_vlm_only
+# Member  : B (Ablation experiments)
+# Note    : Higher API cost than composite (~2× calls) — monitor quota
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: vlm_siliconflow   # <-- ABLATION: VLM only (no CLIP gate)
+  - _self_
+
+experiment:
+  name: "grpo_full_vlm_only"
+  description: "Ablation: VLM-only reward (no CLIP gate, higher API cost)"
+  tags: ["grpo", "ablation", "vlm_only", "siliconflow"]
+
+model:
+  model_path: "deepseek-ai/Janus-Pro-1B"
+  dtype: "bfloat16"
+  use_flash_attention: true
+
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+      - "k_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+
+training:
+  learning_rate: 1e-5
+  num_epochs: 10
+  batch_size: 2
+  gradient_accumulation_steps: 8
+  max_grad_norm: 1.0
+  weight_decay: 0.01
+
+  grpo:
+    group_size: 4
+    kl_coef: 0.01
+    normalize_rewards: true
+    use_advantage_normalization: true
+    baseline_type: "mean"
+
+  warmup_steps: 100
+  lr_scheduler: "cosine"
+
+  save_steps: 300
+  eval_steps: 150
+  logging_steps: 10
+  output_dir: "./outputs/grpo_full_vlm_only"
+  save_total_limit: 3
+
+data:
+  train_file: "data/prompts/train_prompts_large.json"
+  eval_file:  "data/prompts/val_prompts.json"
+  max_train_samples: null
+  max_eval_samples: 25
+
+evaluation:
+  benchmarks:
+    - "t2i_compbench"
+    - "tifa"
+    - "geneval"
+  compute_clip_score: true
+  compute_vlm_score: true
+  save_images: true
+  num_samples_per_prompt: 3
+
+logging:
+  use_wandb: true
+  wandb_project: "t2i-rl"
+  wandb_run_name: "ablation-vlm-only-${now:%Y%m%d-%H%M%S}"
+  logging_steps: 10
+
+hardware:
+  bf16: true
+  dataloader_num_workers: 4
+  seed: 42
