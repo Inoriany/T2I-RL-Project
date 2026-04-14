@@ -677,7 +677,7 @@ class JanusProGenerator(ImageGenerator):
                 past_key_values = outputs.past_key_values
                 hidden_states = outputs.last_hidden_state
 
-                logits = self.model.gen_head(hidden_states[:, -1, :])
+                logits = self.model.gen_head(hidden_states[:, -1, :]).float()  # fp32 to prevent CFG overflow
 
                 # CFG
                 logit_cond = logits[0::2, :]
@@ -685,6 +685,14 @@ class JanusProGenerator(ImageGenerator):
                 logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
 
                 probs = torch.softmax(logits / temperature, dim=-1)
+
+                # Defensive: if NaN/Inf in probs (e.g. from corrupted weights),
+                # fall back to uniform distribution to avoid torch.multinomial crash
+                if torch.isnan(probs).any() or torch.isinf(probs).any():
+                    print(f"  [WARNING] NaN/Inf in Phase 1 probs at step {i}, "
+                          f"replacing with uniform distribution")
+                    probs = torch.ones_like(probs) / probs.shape[-1]
+
                 next_token = torch.multinomial(probs, num_samples=1)
                 step_log_probs = torch.log_softmax(
                     (logits / temperature).to(torch.float32), dim=-1
