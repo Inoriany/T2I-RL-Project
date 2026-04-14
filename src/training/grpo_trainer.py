@@ -74,17 +74,72 @@ class GRPOTrainer(BaseTrainer):
             self.ref_model = None
         
     def _setup_reference_model(self) -> None:
-        """Create frozen reference model for KL computation."""
-        import copy
+        """Create frozen reference model for KL computation.
         
-        # Deep copy the model
-        self.ref_model = copy.deepcopy(self.generator.model)
-        
-        # Freeze all parameters
-        for param in self.ref_model.parameters():
-            param.requires_grad = False
-            
-        self.ref_model.eval()
+        Memory-aware strategy:
+        - GPU VRAM >= 20 GB: save initial LoRA weights; for KL scoring,
+          temporarily swap LoRA weights on the *same* base model (no deepcopy).
+        - GPU VRAM < 20 GB: skip reference model entirely and force kl_coef=0
+          to avoid OOM (deepcopy of a 4-bit model often loses quantization and
+          doubles VRAM usage).
+        """
+        # Detect available VRAM
+        vram_gb = 0.0
+        if torch.cuda.is_available():
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+
+        if vram_gb < 20.0:
+            # Low-VRAM path: disable KL entirely
+            print(
+                f"[GRPOTrainer] Low VRAM detected ({vram_gb:.1f} GB < 20 GB). "
+                f"Disabling KL regularization (kl_coef forced to 0) to prevent OOM."
+            )
+            self.grpo_config.kl_coef = 0.0
+            self.grpo_config.target_kl = None
+            self.ref_model = None
+            self._ref_lora_state = None
+            return
+
+        # High-VRAM path: save initial LoRA state dict instead of deepcopy.
+        # This avoids duplicating the full base model and breaking 4-bit quantization.
+        self._ref_lora_state = None
+        try:
+            from peft import PeftModel
+            model = self.generator.model
+            if isinstance(model, PeftModel):
+                # Save a frozen copy of the initial LoRA adapter weights
+                import copy
+                self._ref_lora_state = copy.deepcopy(
+                    {k: v.cpu() for k, v in model.state_dict().items()
+                     if "lora_" in k}
+                )
+                print(
+                    f"[GRPOTrainer] Saved initial LoRA state for KL reference "
+                    f"({len(self._ref_lora_state)} tensors, VRAM={vram_gb:.1f} GB). "
+                    f"No deepcopy of base model needed."
+                )
+                # ref_model stays None — we use weight-swap approach
+                self.ref_model = None
+                return
+        except ImportError:
+            pass
+
+        # Fallback: try deepcopy (only for non-quantized models on high-VRAM GPUs)
+        try:
+            import copy
+            self.ref_model = copy.deepcopy(self.generator.model)
+            for param in self.ref_model.parameters():
+                param.requires_grad = False
+            self.ref_model.eval()
+            print(f"[GRPOTrainer] Created deepcopy reference model (VRAM={vram_gb:.1f} GB).")
+        except Exception as e:
+            print(
+                f"[GRPOTrainer] Failed to deepcopy reference model: {e}. "
+                f"Disabling KL regularization."
+            )
+            self.grpo_config.kl_coef = 0.0
+            self.ref_model = None
+            self._ref_lora_state = None
         
     def compute_loss(self, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         """
@@ -388,17 +443,23 @@ class GRPOTrainer(BaseTrainer):
         Compute KL divergence between current policy and reference policy.
         
         KL(π || π_ref) = E[log π(a|s) - log π_ref(a|s)]
+        
+        Supports three modes:
+        1. ref_model exists (deepcopy path) — score with ref_model directly
+        2. _ref_lora_state exists (LoRA weight-swap path) — temporarily swap
+           LoRA weights to initial values, score, then swap back
+        3. Neither exists — return 0 (KL disabled)
         """
-        if self.ref_model is None or self.grpo_config.kl_coef <= 0:
+        if self.grpo_config.kl_coef <= 0:
             return torch.tensor(0.0, device=self.device)
 
-        if generation_info is not None and hasattr(self.generator, "score_from_generation_info"):
-            with torch.no_grad():
-                ref_log_probs = self.generator.score_from_generation_info(
-                    generation_info,
-                    model=self.ref_model,
-                )
-        else:
+        has_ref_model = self.ref_model is not None
+        has_ref_lora = getattr(self, "_ref_lora_state", None) is not None
+
+        if not has_ref_model and not has_ref_lora:
+            return torch.tensor(0.0, device=self.device)
+
+        if generation_info is None or not hasattr(self.generator, "score_from_generation_info"):
             if not self._warned_missing_kl_support:
                 warnings.warn(
                     "KL regularization requested, but generator does not expose "
@@ -407,6 +468,36 @@ class GRPOTrainer(BaseTrainer):
                 )
                 self._warned_missing_kl_support = True
             return torch.tensor(0.0, device=self.device)
+
+        if has_ref_model:
+            # Standard path: score with a separate reference model
+            with torch.no_grad():
+                ref_log_probs = self.generator.score_from_generation_info(
+                    generation_info,
+                    model=self.ref_model,
+                )
+        else:
+            # LoRA weight-swap path: temporarily load initial LoRA weights
+            model = self.generator.model
+            # Save current LoRA weights
+            current_lora_state = {
+                k: v.clone() for k, v in model.state_dict().items()
+                if "lora_" in k
+            }
+            try:
+                # Load reference (initial) LoRA weights
+                ref_state = {k: v.to(self.device) for k, v in self._ref_lora_state.items()}
+                model.load_state_dict(ref_state, strict=False)
+                with torch.no_grad():
+                    ref_log_probs = self.generator.score_from_generation_info(
+                        generation_info,
+                        use_grad=False,
+                    )
+            finally:
+                # Restore current LoRA weights
+                current_state = {k: v.to(self.device) for k, v in current_lora_state.items()}
+                model.load_state_dict(current_state, strict=False)
+                del current_lora_state, current_state
 
         kl_div = (current_log_probs - ref_log_probs).mean()
 
