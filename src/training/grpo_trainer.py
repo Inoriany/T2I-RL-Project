@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
+from tqdm import tqdm
 
 from src.training.base_trainer import BaseTrainer, TrainingConfig
 
@@ -30,6 +31,7 @@ class GRPOConfig(TrainingConfig):
     num_samples_per_prompt: int = 4
     temperature: float = 1.0
     clip_ratio: float = 0.2
+    ppo_epochs: int = 1
     use_advantage_normalization: bool = True
     baseline_type: str = "mean"  # "mean", "min", "ema"
     ema_decay: float = 0.99
@@ -94,38 +96,116 @@ class GRPOTrainer(BaseTrainer):
         Returns:
             Dictionary with loss and auxiliary metrics
         """
+        rollout = self._prepare_rollout_batch(batch)
+        return self._compute_replay_loss(rollout)
+
+    def _train_epoch(self) -> None:
+        """Train one epoch with rollout-once, replay-many PPO updates."""
+        self.generator.model.train()
+
+        total_loss = 0.0
+        metric_sums: Dict[str, float] = {}
+        metric_counts: Dict[str, int] = {}
+        progress_bar = tqdm(
+            self.train_dataloader,
+            desc=f"Epoch {self.current_epoch}",
+        )
+
+        if self.config.gradient_accumulation_steps != 1:
+            warnings.warn(
+                "GRPO PPO replay uses one optimizer step per inner PPO epoch; "
+                "forcing effective gradient_accumulation_steps=1 for correctness.",
+                stacklevel=2,
+            )
+
+        for _, batch in enumerate(progress_bar):
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            rollout = self._prepare_rollout_batch(batch)
+            ppo_losses = []
+
+            for inner_idx in range(self.grpo_config.ppo_epochs):
+                loss_dict = self._compute_replay_loss(rollout)
+                loss = loss_dict["loss"]
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.generator.get_trainable_parameters(),
+                    self.config.max_grad_norm,
+                )
+                self.optimizer.step()
+                self.scheduler.step()
+
+                self.global_step += 1
+                total_loss += loss.item()
+                ppo_losses.append(loss.item())
+
+                for key, value in loss_dict.items():
+                    if key == "loss":
+                        continue
+                    if isinstance(value, torch.Tensor):
+                        if value.numel() == 1:
+                            scalar = value.detach().item()
+                        else:
+                            continue
+                    elif isinstance(value, (int, float)):
+                        scalar = float(value)
+                    else:
+                        continue
+                    metric_sums[key] = metric_sums.get(key, 0.0) + scalar
+                    metric_counts[key] = metric_counts.get(key, 0) + 1
+
+                if self.global_step % self.config.logging_steps == 0:
+                    avg_loss = total_loss / self.config.logging_steps
+                    avg_metrics = {
+                        f"train/{k}": metric_sums[k] / max(metric_counts[k], 1)
+                        for k in metric_sums
+                    }
+                    self.log({
+                        "train/loss": avg_loss,
+                        "train/learning_rate": self.scheduler.get_last_lr()[0],
+                        **avg_metrics,
+                    })
+                    total_loss = 0.0
+                    metric_sums = {}
+                    metric_counts = {}
+
+                if self.global_step % self.config.save_steps == 0:
+                    self.save_checkpoint(f"checkpoint-{self.global_step}")
+
+                if (
+                    self.eval_dataloader is not None
+                    and self.global_step % self.config.eval_steps == 0
+                ):
+                    eval_metrics = self.evaluate()
+                    self.log({f"eval/{k}": v for k, v in eval_metrics.items()})
+                    self.generator.model.train()
+
+            progress_bar.set_postfix({
+                "loss": round(ppo_losses[-1], 4),
+                "ppo_epochs": self.grpo_config.ppo_epochs,
+            })
+
+    def _prepare_rollout_batch(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+        """Roll out once and cache rewards/advantages for PPO-style replays."""
         prompts = batch["prompt"]
         batch_size = len(prompts)
         K = self.grpo_config.num_samples_per_prompt
-        
-        # Expand prompts for multiple samples
         expanded_prompts = [p for p in prompts for _ in range(K)]
-        
-        # Generate samples and compute log probabilities
-        # NOTE: log_probs must keep gradients for policy optimization.
-        images, log_probs, generation_info = self._generate_with_logprobs(expanded_prompts)
 
-        # Compute rewards without gradient tracking (reward model is fixed)
+        images, current_log_probs, generation_info = self._generate_with_logprobs(expanded_prompts)
+
         with torch.no_grad():
             reward_output = self.reward_model.compute_reward(images, expanded_prompts)
-            rewards = reward_output.rewards  # Shape: (batch_size * K,)
-            
-        # Reshape rewards to (batch_size, K)
-        rewards = rewards.view(batch_size, K)
-        log_probs = log_probs.view(batch_size, K)
-        
-        # Compute advantages
+            rewards = reward_output.rewards.view(batch_size, K)
+
         advantages = self._compute_advantages(rewards)
-        
-        # Normalize advantages
         if self.grpo_config.use_advantage_normalization:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        # PPO-style clipped policy objective.
-        # We use the detached current-policy log-prob as the behavior-policy
-        # baseline for this on-policy batch, so gradients only flow through the
-        # numerator path.
-        old_log_probs = None
+        old_log_probs = current_log_probs.detach().view(batch_size, K)
         if generation_info is not None:
             collected_old_log_probs = []
             for item in generation_info:
@@ -134,10 +214,35 @@ class GRPOTrainer(BaseTrainer):
             if collected_old_log_probs:
                 old_log_probs = torch.cat(collected_old_log_probs).view(batch_size, K)
 
-        if old_log_probs is None:
-            old_log_probs = log_probs.detach()
+        rollout = {
+            "prompts": prompts,
+            "expanded_prompts": expanded_prompts,
+            "images": images,
+            "generation_info": generation_info,
+            "old_log_probs": old_log_probs.detach(),
+            "rewards": rewards.detach(),
+            "advantages": advantages.detach(),
+            "reward_output": reward_output,
+        }
+        return rollout
 
-        log_ratio = log_probs - old_log_probs
+    def _compute_replay_loss(self, rollout: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        """Re-score a cached rollout under current policy for PPO-style updates."""
+        rewards = rollout["rewards"]
+        advantages = rollout["advantages"]
+        old_log_probs = rollout["old_log_probs"]
+        generation_info = rollout["generation_info"]
+        reward_output = rollout["reward_output"]
+
+        if generation_info is not None and hasattr(self.generator, "score_from_generation_info"):
+            current_log_probs = self.generator.score_from_generation_info(
+                generation_info,
+                use_grad=True,
+            ).view_as(old_log_probs)
+        else:
+            current_log_probs = old_log_probs.clone().detach().requires_grad_(True)
+
+        log_ratio = current_log_probs - old_log_probs
         ratio = torch.exp(log_ratio)
         clipped_ratio = torch.clamp(
             ratio,
@@ -145,24 +250,21 @@ class GRPOTrainer(BaseTrainer):
             1.0 + self.grpo_config.clip_ratio,
         )
 
-        advantages_detached = advantages.detach()
-        surrogate_unclipped = ratio * advantages_detached
-        surrogate_clipped = clipped_ratio * advantages_detached
+        surrogate_unclipped = ratio * advantages
+        surrogate_clipped = clipped_ratio * advantages
         surrogate = torch.minimum(surrogate_unclipped, surrogate_clipped)
         policy_loss = -surrogate.mean()
         clip_fraction = ((ratio - clipped_ratio).abs() > 1e-8).float().mean()
-        
-        # Compute KL divergence penalty
+
         kl_div = self._compute_kl_divergence(
-            expanded_prompts,
-            images,
-            log_probs.reshape(-1),
+            rollout["expanded_prompts"],
+            rollout["images"],
+            current_log_probs.reshape(-1),
             generation_info=generation_info,
         )
-        
-        # Total loss
+
         total_loss = policy_loss + self.grpo_config.kl_coef * kl_div
-        
+
         metrics = {
             "loss": total_loss,
             "policy_loss": policy_loss,
@@ -181,11 +283,15 @@ class GRPOTrainer(BaseTrainer):
             for name, values in component_rewards.items():
                 if isinstance(values, torch.Tensor) and values.numel() > 0:
                     metrics[f"reward_{name}_mean"] = values.mean()
-                    metrics[f"reward_{name}_std"] = values.std() if values.numel() > 1 else torch.tensor(0.0, device=values.device)
+                    metrics[f"reward_{name}_std"] = (
+                        values.std() if values.numel() > 1 else torch.tensor(0.0, device=values.device)
+                    )
 
         responses = details.get("responses")
         if isinstance(responses, list) and responses:
-            parse_error_count = sum(1 for r in responses if isinstance(r, dict) and r.get("parse_error"))
+            parse_error_count = sum(
+                1 for r in responses if isinstance(r, dict) and r.get("parse_error")
+            )
             metrics["vlm_parse_error_rate"] = torch.tensor(
                 parse_error_count / len(responses),
                 device=self.device,

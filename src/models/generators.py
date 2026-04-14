@@ -757,6 +757,7 @@ class JanusProGenerator(ImageGenerator):
         self,
         generation_info: Union[Dict[str, Any], List[Dict[str, Any]]],
         model: Optional[Any] = None,
+        use_grad: bool = False,
     ) -> torch.Tensor:
         """Score sampled trajectories under a provided model."""
         score_model = model or self.model
@@ -771,6 +772,7 @@ class JanusProGenerator(ImageGenerator):
                 cfg_weight=item["cfg_weight"],
                 parallel_size=item["parallel_size"],
                 model=score_model,
+                use_grad=use_grad,
             )
             all_scores.append(scores)
         return torch.cat(all_scores)
@@ -783,6 +785,7 @@ class JanusProGenerator(ImageGenerator):
         cfg_weight: float,
         parallel_size: int,
         model: Optional[Any] = None,
+        use_grad: bool = False,
     ) -> torch.Tensor:
         """Compute sequence log-probs for already-sampled Janus image tokens."""
         score_model = model or self.model
@@ -815,7 +818,9 @@ class JanusProGenerator(ImageGenerator):
 
         total_img_tokens = self.image_token_num_per_image
 
-        with torch.no_grad(), autocast_ctx:
+        grad_ctx = nullcontext() if use_grad else torch.no_grad()
+
+        with grad_ctx, autocast_ctx:
             all_img_embeds = score_model.prepare_gen_img_embeds(gen_tok_cfg.reshape(-1))
             embed_dim = all_img_embeds.shape[-1]
             all_img_embeds = all_img_embeds.view(

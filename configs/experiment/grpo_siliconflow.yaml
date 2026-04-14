@@ -57,6 +57,8 @@ training:
   grpo:
     group_size: 4                   # Generate 4 images per prompt per step
     kl_coef: 0.01                   # KL penalty against reference model
+    clip_ratio: 0.2                 # PPO-style ratio clipping
+    ppo_epochs: 3                   # Reuse each sampled batch for 3 policy updates
     normalize_rewards: true
     use_advantage_normalization: true
     baseline_type: "mean"           # Subtract group mean reward

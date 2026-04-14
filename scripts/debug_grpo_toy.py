@@ -80,7 +80,7 @@ class ToyGenerator:
             return sampled, log_probs, generation_info
         return sampled, log_probs
 
-    def score_from_generation_info(self, generation_info, model=None):
+    def score_from_generation_info(self, generation_info, model=None, use_grad=False):
         score_model = model or self.model
         scores = []
         for item in generation_info:
@@ -100,7 +100,7 @@ def set_seed(seed):
     torch.manual_seed(seed)
 
 
-def run_experiment(kl_coef, steps, seed):
+def run_experiment(kl_coef, steps, seed, ppo_epochs):
     set_seed(seed)
 
     prompts = [f"prompt_{i}" for i in range(8)]
@@ -124,6 +124,7 @@ def run_experiment(kl_coef, steps, seed):
         use_wandb=False,
         num_samples_per_prompt=4,
         kl_coef=kl_coef,
+        ppo_epochs=ppo_epochs,
         baseline_type="mean",
         use_advantage_normalization=True,
         warmup_steps=0,
@@ -145,12 +146,15 @@ def run_experiment(kl_coef, steps, seed):
             iterator = iter(dataloader)
             batch = next(iterator)
 
-        loss_dict = trainer.compute_loss(batch)
-        loss = loss_dict["loss"]
-        trainer.optimizer.zero_grad()
-        loss.backward()
-        trainer.optimizer.step()
-        trainer.scheduler.step()
+        rollout = trainer._prepare_rollout_batch(batch)
+        loss_dict = None
+        for _ in range(ppo_epochs):
+            loss_dict = trainer._compute_replay_loss(rollout)
+            loss = loss_dict["loss"]
+            trainer.optimizer.zero_grad()
+            loss.backward()
+            trainer.optimizer.step()
+            trainer.scheduler.step()
 
         with torch.no_grad():
             avg_correct_prob = 0.0
@@ -174,7 +178,7 @@ def run_experiment(kl_coef, steps, seed):
         metrics.append(step_metrics)
 
     return {
-        "config": {"kl_coef": kl_coef, "steps": steps, "seed": seed},
+        "config": {"kl_coef": kl_coef, "steps": steps, "seed": seed, "ppo_epochs": ppo_epochs},
         "first": metrics[:5],
         "last": metrics[-5:],
         "final": metrics[-1],
@@ -188,10 +192,11 @@ def main():
     parser.add_argument("--steps", type=int, default=80)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--kl-values", type=float, nargs="+", default=[0.0, 0.1, 1.0])
+    parser.add_argument("--ppo-epochs", type=int, default=1)
     args = parser.parse_args()
 
     results = {
-        f"kl_{kl}": run_experiment(kl, args.steps, args.seed)
+        f"kl_{kl}": run_experiment(kl, args.steps, args.seed, args.ppo_epochs)
         for kl in args.kl_values
     }
     print(json.dumps(results, indent=2))
