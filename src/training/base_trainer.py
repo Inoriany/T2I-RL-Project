@@ -93,6 +93,7 @@ class BaseTrainer(ABC):
         
         # Setup logging
         self.logger = None
+        self.log_history: List[Dict[str, Any]] = []
         if config.use_wandb:
             self._setup_wandb()
             
@@ -141,12 +142,24 @@ class BaseTrainer(ABC):
             print("wandb not installed, skipping W&B logging")
             
     def log(self, metrics: Dict[str, Any], step: Optional[int] = None) -> None:
-        """Log metrics."""
+        """Log metrics to W&B, console, and in-memory history."""
         step = step or self.global_step
         
         if self.logger is not None:
-            self.logger.log(metrics, step=step)
+            try:
+                self.logger.log(metrics, step=step)
+            except Exception:
+                pass  # W&B failures should never block training
             
+        # Accumulate for offline plotting
+        record = {"step": step}
+        for k, v in metrics.items():
+            if isinstance(v, (int, float)):
+                record[k] = v
+            elif isinstance(v, torch.Tensor) and v.numel() == 1:
+                record[k] = v.item()
+        self.log_history.append(record)
+
         # Also print to console
         metrics_str = " | ".join([f"{k}: {v:.4f}" for k, v in metrics.items() if isinstance(v, (int, float))])
         print(f"Step {step} | {metrics_str}")
