@@ -162,17 +162,34 @@ def get_demo_dataloader(cfg: DictConfig):
 def setup_trainer(cfg: DictConfig, generator, reward_model, train_dataloader, eval_dataloader):
     """Initialize the trainer based on config."""
     if cfg.training.algorithm == "grpo":
+        grpo_cfg = cfg.training.grpo
+        num_samples_per_prompt = getattr(grpo_cfg, "num_samples_per_prompt", None)
+        if num_samples_per_prompt is None:
+            num_samples_per_prompt = getattr(grpo_cfg, "group_size")
+
+        clip_ratio = getattr(grpo_cfg, "clip_ratio", None)
+        if clip_ratio is None:
+            clip_ratio = getattr(grpo_cfg, "clip_range", 0.2)
+
+        baseline_type = getattr(grpo_cfg, "baseline_type", "mean")
+        baseline_aliases = {
+            "group_mean": "mean",
+            "none": "mean",
+        }
+        baseline_type = baseline_aliases.get(baseline_type, baseline_type)
+
         config = GRPOConfig(
             learning_rate=cfg.training.learning_rate,
             num_epochs=cfg.training.num_epochs,
             batch_size=cfg.training.batch_size,
             gradient_accumulation_steps=cfg.training.gradient_accumulation_steps,
             max_grad_norm=cfg.training.max_grad_norm,
-            num_samples_per_prompt=cfg.training.grpo.num_samples_per_prompt,
-            temperature=cfg.training.grpo.temperature,
-            kl_coef=cfg.training.grpo.kl_coef,
-            use_advantage_normalization=cfg.training.grpo.use_advantage_normalization,
-            baseline_type=cfg.training.grpo.baseline_type,
+            num_samples_per_prompt=num_samples_per_prompt,
+            temperature=grpo_cfg.temperature,
+            kl_coef=grpo_cfg.kl_coef,
+            clip_ratio=clip_ratio,
+            use_advantage_normalization=grpo_cfg.use_advantage_normalization,
+            baseline_type=baseline_type,
             warmup_steps=cfg.training.warmup_steps,
             weight_decay=cfg.training.weight_decay,
             save_steps=cfg.training.save_steps,

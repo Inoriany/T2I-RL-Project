@@ -478,6 +478,7 @@ class JanusProGenerator(ImageGenerator):
         self,
         prompt: Union[str, List[str]],
         config: Optional[GenerationConfig] = None,
+        return_generation_info: bool = False,
         **kwargs: Any,
     ) -> Tuple[List[Image.Image], torch.Tensor]:
         """
@@ -496,19 +497,38 @@ class JanusProGenerator(ImageGenerator):
             
         all_images = []
         all_log_probs = []
+        all_generation_info = []
         
         for p in prompt:
-            images, log_probs = self._generate_with_logprobs_single(
-                prompt=p,
-                temperature=config.temperature,
-                cfg_weight=config.guidance_scale,
-                parallel_size=config.num_images_per_prompt,
-                **kwargs,
-            )
+            if return_generation_info:
+                images, log_probs, generation_info = self._generate_with_logprobs_single(
+                    prompt=p,
+                    temperature=config.temperature,
+                    cfg_weight=config.guidance_scale,
+                    parallel_size=config.num_images_per_prompt,
+                    return_generation_info=True,
+                    **kwargs,
+                )
+            else:
+                images, log_probs = self._generate_with_logprobs_single(
+                    prompt=p,
+                    temperature=config.temperature,
+                    cfg_weight=config.guidance_scale,
+                    parallel_size=config.num_images_per_prompt,
+                    return_generation_info=False,
+                    **kwargs,
+                )
             all_images.extend(images)
-            all_log_probs.append(log_probs)
+            if return_generation_info:
+                all_log_probs.append(log_probs)
+                all_generation_info.append(generation_info)
+            else:
+                all_log_probs.append(log_probs)
             
-        return all_images, torch.cat(all_log_probs)
+        merged_log_probs = torch.cat(all_log_probs)
+        if return_generation_info:
+            return all_images, merged_log_probs, all_generation_info
+        return all_images, merged_log_probs
     
     def _generate_with_logprobs_single(
         self,
@@ -516,6 +536,7 @@ class JanusProGenerator(ImageGenerator):
         temperature: float = 1.0,
         parallel_size: int = 1,
         cfg_weight: float = 5.0,
+        return_generation_info: bool = False,
         **kwargs: Any,
     ) -> Tuple[List[Image.Image], torch.Tensor]:
         """
@@ -575,6 +596,11 @@ class JanusProGenerator(ImageGenerator):
             (parallel_size, self.image_token_num_per_image),
             dtype=torch.int,
         ).to(self.device)
+        old_total_log_probs = torch.zeros(
+            parallel_size,
+            dtype=torch.float32,
+            device=self.device,
+        )
 
         autocast_ctx = (
             torch.autocast(device_type="cuda", dtype=compute_dtype)
@@ -605,6 +631,12 @@ class JanusProGenerator(ImageGenerator):
 
                 probs = torch.softmax(logits / temperature, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
+                step_log_probs = torch.log_softmax(
+                    (logits / temperature).to(torch.float32), dim=-1
+                )
+                old_total_log_probs += step_log_probs.gather(
+                    1, next_token.long()
+                ).squeeze(-1)
                 generated_tokens[:, i] = next_token.squeeze(dim=-1)
 
                 # Prepare next step embedding
@@ -707,7 +739,114 @@ class JanusProGenerator(ImageGenerator):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        if return_generation_info:
+            generation_info = {
+                "prompt": prompt,
+                "tokens": tokens.detach().clone(),
+                "generated_tokens": generated_tokens.detach().clone(),
+                "old_log_probs": old_total_log_probs.detach().clone(),
+                "temperature": temperature,
+                "cfg_weight": cfg_weight,
+                "parallel_size": parallel_size,
+            }
+            return images, total_log_probs, generation_info
+
         return images, total_log_probs
+
+    def score_from_generation_info(
+        self,
+        generation_info: Union[Dict[str, Any], List[Dict[str, Any]]],
+        model: Optional[Any] = None,
+    ) -> torch.Tensor:
+        """Score sampled trajectories under a provided model."""
+        score_model = model or self.model
+        if isinstance(generation_info, dict):
+            generation_info = [generation_info]
+        all_scores = []
+        for item in generation_info:
+            scores = self._score_generated_tokens(
+                tokens=item["tokens"],
+                generated_tokens=item["generated_tokens"],
+                temperature=item["temperature"],
+                cfg_weight=item["cfg_weight"],
+                parallel_size=item["parallel_size"],
+                model=score_model,
+            )
+            all_scores.append(scores)
+        return torch.cat(all_scores)
+
+    def _score_generated_tokens(
+        self,
+        tokens: torch.Tensor,
+        generated_tokens: torch.Tensor,
+        temperature: float,
+        cfg_weight: float,
+        parallel_size: int,
+        model: Optional[Any] = None,
+    ) -> torch.Tensor:
+        """Compute sequence log-probs for already-sampled Janus image tokens."""
+        score_model = model or self.model
+        compute_dtype = self._get_compute_dtype()
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", dtype=compute_dtype)
+            if self.device.startswith("cuda")
+            else nullcontext()
+        )
+
+        tokens = tokens.to(self.device)
+        generated_tokens = generated_tokens.to(self.device)
+
+        with torch.no_grad(), autocast_ctx:
+            prompt_embeds = score_model.language_model.get_input_embeddings()(tokens)
+            prompt_embeds = prompt_embeds.to(compute_dtype)
+            prompt_out = score_model.language_model.model(
+                inputs_embeds=prompt_embeds,
+                use_cache=True,
+            )
+            prompt_kv = prompt_out.past_key_values
+            del prompt_out
+
+        gen_tok_flat_cfg = torch.cat([generated_tokens, generated_tokens], dim=0)
+        interleaved_idx = torch.zeros(parallel_size * 2, dtype=torch.long, device=self.device)
+        for s in range(parallel_size):
+            interleaved_idx[2 * s] = s
+            interleaved_idx[2 * s + 1] = s + parallel_size
+        gen_tok_cfg = gen_tok_flat_cfg[interleaved_idx]
+
+        total_img_tokens = self.image_token_num_per_image
+
+        with torch.no_grad(), autocast_ctx:
+            all_img_embeds = score_model.prepare_gen_img_embeds(gen_tok_cfg.reshape(-1))
+            embed_dim = all_img_embeds.shape[-1]
+            all_img_embeds = all_img_embeds.view(
+                parallel_size * 2, total_img_tokens, embed_dim
+            ).to(compute_dtype)
+
+            scoring_out = score_model.language_model.model(
+                inputs_embeds=all_img_embeds,
+                use_cache=False,
+                past_key_values=prompt_kv,
+            )
+            hidden = scoring_out.last_hidden_state
+            pred_hidden = hidden[:, :-1, :]
+            logits = score_model.gen_head(pred_hidden)
+
+            logit_cond = logits[0::2, :, :]
+            logit_uncond = logits[1::2, :, :]
+            cfg_logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
+            log_probs_all = torch.log_softmax(cfg_logits / temperature, dim=-1)
+
+            target_tokens = generated_tokens[:, 1:]
+            selected_log_probs = log_probs_all.gather(
+                2, target_tokens.unsqueeze(-1).long()
+            ).squeeze(-1)
+            total_log_probs = selected_log_probs.sum(dim=1)
+
+        del prompt_kv, all_img_embeds, scoring_out, hidden, pred_hidden, logits, log_probs_all
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return total_log_probs
     
     def enable_lora(
         self,

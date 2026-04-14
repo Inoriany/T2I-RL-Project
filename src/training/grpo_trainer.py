@@ -13,6 +13,7 @@ GRPO is an RL algorithm that:
 
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+import warnings
 
 import torch
 import torch.nn as nn
@@ -63,6 +64,7 @@ class GRPOTrainer(BaseTrainer):
         
         # Reference model for KL computation (frozen copy of initial policy)
         self.ref_model = None
+        self._warned_missing_kl_support = False
         if self.grpo_config.kl_coef > 0 or self.grpo_config.target_kl is not None:
             self._setup_reference_model()
         else:
@@ -101,7 +103,7 @@ class GRPOTrainer(BaseTrainer):
         
         # Generate samples and compute log probabilities
         # NOTE: log_probs must keep gradients for policy optimization.
-        images, log_probs = self._generate_with_logprobs(expanded_prompts)
+        images, log_probs, generation_info = self._generate_with_logprobs(expanded_prompts)
 
         # Compute rewards without gradient tracking (reward model is fixed)
         with torch.no_grad():
@@ -118,25 +120,78 @@ class GRPOTrainer(BaseTrainer):
         # Normalize advantages
         if self.grpo_config.use_advantage_normalization:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-            
-        # Compute policy loss
-        # We want to increase log_prob for high-advantage samples
-        policy_loss = -(advantages.detach() * log_probs).mean()
+
+        # PPO-style clipped policy objective.
+        # We use the detached current-policy log-prob as the behavior-policy
+        # baseline for this on-policy batch, so gradients only flow through the
+        # numerator path.
+        old_log_probs = None
+        if generation_info is not None:
+            collected_old_log_probs = []
+            for item in generation_info:
+                if isinstance(item, dict) and "old_log_probs" in item:
+                    collected_old_log_probs.append(item["old_log_probs"])
+            if collected_old_log_probs:
+                old_log_probs = torch.cat(collected_old_log_probs).view(batch_size, K)
+
+        if old_log_probs is None:
+            old_log_probs = log_probs.detach()
+
+        log_ratio = log_probs - old_log_probs
+        ratio = torch.exp(log_ratio)
+        clipped_ratio = torch.clamp(
+            ratio,
+            1.0 - self.grpo_config.clip_ratio,
+            1.0 + self.grpo_config.clip_ratio,
+        )
+
+        advantages_detached = advantages.detach()
+        surrogate_unclipped = ratio * advantages_detached
+        surrogate_clipped = clipped_ratio * advantages_detached
+        surrogate = torch.minimum(surrogate_unclipped, surrogate_clipped)
+        policy_loss = -surrogate.mean()
+        clip_fraction = ((ratio - clipped_ratio).abs() > 1e-8).float().mean()
         
         # Compute KL divergence penalty
-        kl_div = self._compute_kl_divergence(expanded_prompts, images)
+        kl_div = self._compute_kl_divergence(
+            expanded_prompts,
+            images,
+            log_probs.reshape(-1),
+            generation_info=generation_info,
+        )
         
         # Total loss
         total_loss = policy_loss + self.grpo_config.kl_coef * kl_div
         
-        return {
+        metrics = {
             "loss": total_loss,
             "policy_loss": policy_loss,
             "kl_div": kl_div,
             "reward_mean": rewards.mean(),
             "reward_std": rewards.std(),
             "advantage_mean": advantages.mean(),
+            "ratio_mean": ratio.mean(),
+            "ratio_std": ratio.std(),
+            "clip_fraction": clip_fraction,
         }
+
+        details = getattr(reward_output, "details", None) or {}
+        component_rewards = details.get("component_rewards")
+        if isinstance(component_rewards, dict):
+            for name, values in component_rewards.items():
+                if isinstance(values, torch.Tensor) and values.numel() > 0:
+                    metrics[f"reward_{name}_mean"] = values.mean()
+                    metrics[f"reward_{name}_std"] = values.std() if values.numel() > 1 else torch.tensor(0.0, device=values.device)
+
+        responses = details.get("responses")
+        if isinstance(responses, list) and responses:
+            parse_error_count = sum(1 for r in responses if isinstance(r, dict) and r.get("parse_error"))
+            metrics["vlm_parse_error_rate"] = torch.tensor(
+                parse_error_count / len(responses),
+                device=self.device,
+            )
+
+        return metrics
         
     def _generate_with_logprobs(
         self,
@@ -146,16 +201,29 @@ class GRPOTrainer(BaseTrainer):
         Generate images and compute log probabilities.
         
         Returns:
-            Tuple of (images, log_probs)
+            Tuple of (images, log_probs, generation_info)
         """
         if hasattr(self.generator, "generate_with_logprobs"):
-            images, log_probs = self.generator.generate_with_logprobs(prompt=prompts)
-            return images, log_probs
+            try:
+                output = self.generator.generate_with_logprobs(
+                    prompt=prompts,
+                    return_generation_info=True,
+                )
+            except TypeError:
+                output = self.generator.generate_with_logprobs(prompt=prompts)
+
+            if isinstance(output, tuple) and len(output) == 3:
+                images, log_probs, generation_info = output
+            else:
+                images, log_probs = output
+                generation_info = None
+
+            return images, log_probs, generation_info
 
         # Fallback path for generators without logprob support
         images = self.generator.generate(prompt=prompts)
         log_probs = self._compute_log_probs(prompts, images)
-        return images, log_probs
+        return images, log_probs, None
     
     def _compute_log_probs(
         self,
@@ -207,6 +275,8 @@ class GRPOTrainer(BaseTrainer):
         self,
         prompts: List[str],
         images: List[Image.Image],
+        current_log_probs: torch.Tensor,
+        generation_info: Optional[Any] = None,
     ) -> torch.Tensor:
         """
         Compute KL divergence between current policy and reference policy.
@@ -216,15 +286,24 @@ class GRPOTrainer(BaseTrainer):
         if self.ref_model is None or self.grpo_config.kl_coef <= 0:
             return torch.tensor(0.0, device=self.device)
 
-        # Current policy log probs
-        current_log_probs = self._compute_log_probs(prompts, images)
-        
-        # Reference policy log probs (using frozen reference model)
-        with torch.no_grad():
-            ref_log_probs = self._compute_ref_log_probs(prompts, images)
-            
+        if generation_info is not None and hasattr(self.generator, "score_from_generation_info"):
+            with torch.no_grad():
+                ref_log_probs = self.generator.score_from_generation_info(
+                    generation_info,
+                    model=self.ref_model,
+                )
+        else:
+            if not self._warned_missing_kl_support:
+                warnings.warn(
+                    "KL regularization requested, but generator does not expose "
+                    "score_from_generation_info(); KL term will be zero.",
+                    stacklevel=2,
+                )
+                self._warned_missing_kl_support = True
+            return torch.tensor(0.0, device=self.device)
+
         kl_div = (current_log_probs - ref_log_probs).mean()
-        
+
         return kl_div
     
     def _compute_ref_log_probs(

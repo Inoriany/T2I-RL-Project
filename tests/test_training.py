@@ -286,6 +286,75 @@ class TestBaseTrainer:
             assert checkpoint_dir.exists()
             assert (checkpoint_dir / "training_state.pt").exists()
 
+    def test_save_checkpoint_uses_save_lora_when_enabled(self, mock_generator, mock_reward_model, sample_dataloader):
+        """Test LoRA-aware checkpoint saving path."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = TrainingConfig(
+                output_dir=tmpdir,
+                use_wandb=False,
+            )
+
+            param = torch.nn.Parameter(torch.randn(10, requires_grad=True))
+            mock_generator.get_trainable_parameters.return_value = [param]
+            mock_generator.model = Mock()
+            mock_generator.save_lora = Mock()
+            mock_generator.lora_enabled = True
+
+            class ConcreteTrainer(BaseTrainer):
+                def compute_loss(self, batch):
+                    return {"loss": torch.tensor(0.5)}
+
+            trainer = ConcreteTrainer(
+                generator=mock_generator,
+                reward_model=mock_reward_model,
+                config=config,
+                train_dataloader=sample_dataloader,
+            )
+
+            trainer.save_checkpoint("test-checkpoint")
+
+            mock_generator.save_lora.assert_called_once()
+
+    def test_logging_averages_aux_metrics_over_window(self, mock_generator, mock_reward_model, sample_dataloader):
+        """Test that reward-like metrics are averaged over the logging window."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = TrainingConfig(
+                output_dir=tmpdir,
+                use_wandb=False,
+                logging_steps=2,
+                gradient_accumulation_steps=1,
+            )
+
+            param = torch.nn.Parameter(torch.randn(10, requires_grad=True))
+            mock_generator.get_trainable_parameters.return_value = [param]
+            mock_generator.model = Mock()
+
+            class ConcreteTrainer(BaseTrainer):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    self.calls = 0
+
+                def compute_loss(self, batch):
+                    self.calls += 1
+                    value = float(self.calls)
+                    return {
+                        "loss": torch.tensor(value, requires_grad=True),
+                        "reward_mean": torch.tensor(value),
+                    }
+
+            trainer = ConcreteTrainer(
+                generator=mock_generator,
+                reward_model=mock_reward_model,
+                config=config,
+                train_dataloader=sample_dataloader,
+            )
+
+            with patch.object(trainer, "log") as mock_log:
+                trainer._train_epoch()
+
+            logged_metrics = mock_log.call_args[0][0]
+            assert logged_metrics["train/reward_mean"] == pytest.approx(1.5, rel=1e-5)
+
 
 class TestTrainerEvaluation:
     """Tests for trainer evaluation functionality."""

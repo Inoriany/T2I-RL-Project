@@ -479,16 +479,33 @@ Respond with ONLY a JSON object in this format:
             json_match = re.search(r'\{[^}]+\}', response)
             if json_match:
                 data = json.loads(json_match.group())
-                total = data.get("total_score", 5.0)
-                return total / 10.0, data  # Normalize to [0, 1]
+                candidate_keys = [
+                    "total_score",
+                    "score",
+                    "reward",
+                    "overall_score",
+                    "final_score",
+                ]
+                for key in candidate_keys:
+                    if key in data:
+                        score = float(data[key])
+                        if score > 1:
+                            score = score / 10.0
+                        return min(max(score, 0.0), 1.0), data
         except (json.JSONDecodeError, AttributeError):
             pass
+
+        import re
+
+        fraction_match = re.search(r'(\d+(?:\.\d+)?)\s*/\s*10\b', response)
+        if fraction_match:
+            score = float(fraction_match.group(1)) / 10.0
+            return min(max(score, 0.0), 1.0), {"raw_response": response}
             
         # Fallback: extract any number
-        import re
         numbers = re.findall(r'(\d+(?:\.\d+)?)', response)
         if numbers:
-            score = float(numbers[-1])
+            score = float(numbers[0])
             if score > 1:
                 score = score / 10.0  # Normalize if needed
             return min(max(score, 0.0), 1.0), {"raw_response": response}

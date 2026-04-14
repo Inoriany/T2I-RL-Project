@@ -218,6 +218,25 @@ class TestVLMRewardModel:
         reward, details = model._parse_reward_response(response)
         
         assert reward == pytest.approx(0.75, rel=0.01)
+
+    def test_parse_reward_response_fraction_format(self):
+        """Test parsing X/10 style responses."""
+        model = VLMRewardModel(use_api=True, api_model="gpt-4v")
+        response = "Score: 8/10"
+
+        reward, details = model._parse_reward_response(response)
+
+        assert reward == pytest.approx(0.8, rel=0.01)
+
+    def test_parse_reward_response_score_key(self):
+        """Test parsing JSON with generic score field."""
+        model = VLMRewardModel(use_api=True, api_model="gpt-4v")
+        response = '{"score": 0.8}'
+
+        reward, details = model._parse_reward_response(response)
+
+        assert reward == pytest.approx(0.8, rel=0.01)
+        assert details["score"] == pytest.approx(0.8, rel=0.01)
         
     def test_parse_reward_response_invalid(self):
         """Test parsing invalid response returns default."""

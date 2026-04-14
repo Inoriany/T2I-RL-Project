@@ -196,6 +196,8 @@ class BaseTrainer(ABC):
         self.generator.model.train()
         
         total_loss = 0
+        metric_sums: Dict[str, float] = {}
+        metric_counts: Dict[str, int] = {}
         progress_bar = tqdm(
             self.train_dataloader,
             desc=f"Epoch {self.current_epoch}",
@@ -212,7 +214,22 @@ class BaseTrainer(ABC):
             # Backward pass
             loss.backward()
             total_loss += loss.item()
-            
+
+            for key, value in loss_dict.items():
+                if key == "loss":
+                    continue
+                if isinstance(value, torch.Tensor):
+                    if value.numel() == 1:
+                        scalar = value.detach().item()
+                    else:
+                        continue
+                elif isinstance(value, (int, float)):
+                    scalar = float(value)
+                else:
+                    continue
+                metric_sums[key] = metric_sums.get(key, 0.0) + scalar
+                metric_counts[key] = metric_counts.get(key, 0) + 1
+             
             # Update weights
             if (step + 1) % self.config.gradient_accumulation_steps == 0:
                 # Gradient clipping
@@ -230,12 +247,18 @@ class BaseTrainer(ABC):
                 # Logging
                 if self.global_step % self.config.logging_steps == 0:
                     avg_loss = total_loss / self.config.logging_steps
+                    avg_metrics = {
+                        f"train/{k}": metric_sums[k] / max(metric_counts[k], 1)
+                        for k in metric_sums
+                    }
                     self.log({
                         "train/loss": avg_loss,
                         "train/learning_rate": self.scheduler.get_last_lr()[0],
-                        **{f"train/{k}": v.item() for k, v in loss_dict.items() if k != "loss"},
+                        **avg_metrics,
                     })
                     total_loss = 0
+                    metric_sums = {}
+                    metric_counts = {}
                     
                 # Checkpointing
                 if self.global_step % self.config.save_steps == 0:
@@ -281,10 +304,16 @@ class BaseTrainer(ABC):
         checkpoint_dir = Path(self.config.output_dir) / name
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
+        model_saved = False
+
         # Save model (LoRA weights if using LoRA)
-        if hasattr(self.generator.model, "save_pretrained"):
+        if getattr(self.generator, "lora_enabled", False) and hasattr(self.generator, "save_lora"):
+            self.generator.save_lora(str(checkpoint_dir))
+            model_saved = True
+        elif hasattr(self.generator.model, "save_pretrained"):
             self.generator.model.save_pretrained(checkpoint_dir)
-            
+            model_saved = True
+             
         # Save optimizer and scheduler
         torch.save({
             "optimizer": self.optimizer.state_dict(),
@@ -292,6 +321,8 @@ class BaseTrainer(ABC):
             "global_step": self.global_step,
             "epoch": self.current_epoch + 1 if name.startswith("checkpoint-epoch-") else self.current_epoch,
             "config": vars(self.config),
+            "lora_enabled": bool(getattr(self.generator, "lora_enabled", False)),
+            "model_saved": model_saved,
         }, checkpoint_dir / "training_state.pt")
         
         print(f"Saved checkpoint to {checkpoint_dir}")
@@ -299,20 +330,32 @@ class BaseTrainer(ABC):
     def load_checkpoint(self, checkpoint_path: str) -> None:
         """Load model checkpoint."""
         checkpoint_dir = Path(checkpoint_path)
+        state_path = checkpoint_dir / "training_state.pt"
+        state = torch.load(state_path, map_location="cpu") if state_path.exists() else {}
         
         # Load model
-        if hasattr(self.generator, "load_model"):
+        if state.get("lora_enabled"):
             from peft import PeftModel
+
+            base_model = self.generator.model
+            if hasattr(base_model, "get_base_model"):
+                try:
+                    base_model = base_model.get_base_model()
+                except Exception:
+                    pass
+            elif hasattr(base_model, "base_model"):
+                base_model = base_model.base_model
+
             try:
                 self.generator.model = PeftModel.from_pretrained(
-                    self.generator.model,
+                    base_model,
                     checkpoint_dir,
                     is_trainable=True,
                 )
             except TypeError:
                 # Backward compatibility for older PEFT versions
                 self.generator.model = PeftModel.from_pretrained(
-                    self.generator.model,
+                    base_model,
                     checkpoint_dir,
                 )
                 for name, param in self.generator.model.named_parameters():
@@ -329,11 +372,12 @@ class BaseTrainer(ABC):
 
             # Rebuild optimizer/scheduler with current model parameters
             self._setup_optimizer()
-            
+        elif hasattr(self.generator.model, "from_pretrained") and state.get("model_saved"):
+            self.generator.model = self.generator.model.from_pretrained(checkpoint_dir)
+            self._setup_optimizer()
+             
         # Load training state
-        state_path = checkpoint_dir / "training_state.pt"
         if state_path.exists():
-            state = torch.load(state_path)
             try:
                 self.optimizer.load_state_dict(state["optimizer"])
                 self.scheduler.load_state_dict(state["scheduler"])
