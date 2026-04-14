@@ -184,6 +184,25 @@ class GRPOTrainer(BaseTrainer):
                 loss_dict = self._compute_replay_loss(rollout)
                 loss = loss_dict["loss"]
 
+                # ---- NaN / Inf guard ----
+                # If loss is invalid, skip the gradient update to avoid
+                # corrupting model weights.  Log diagnostics for debugging.
+                if torch.isnan(loss) or torch.isinf(loss):
+                    diag = {
+                        k: (v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else v)
+                        for k, v in loss_dict.items()
+                        if k != "loss"
+                    }
+                    print(
+                        f"[WARN] Step {self.global_step + 1}: "
+                        f"NaN/Inf loss detected, skipping gradient update. "
+                        f"Diagnostics: {diag}"
+                    )
+                    self.optimizer.zero_grad()
+                    self.global_step += 1
+                    ppo_losses.append(0.0)
+                    continue
+
                 self.optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(
@@ -298,6 +317,10 @@ class GRPOTrainer(BaseTrainer):
             current_log_probs = old_log_probs.clone().detach().requires_grad_(True)
 
         log_ratio = current_log_probs - old_log_probs
+        # Clamp log-ratio to prevent extreme importance-sampling ratios.
+        # exp(20) ≈ 5e8 is already far beyond useful; clamping here is
+        # standard PPO practice and prevents inf/NaN from propagating.
+        log_ratio = torch.clamp(log_ratio, min=-20.0, max=20.0)
         ratio = torch.exp(log_ratio)
         clipped_ratio = torch.clamp(
             ratio,

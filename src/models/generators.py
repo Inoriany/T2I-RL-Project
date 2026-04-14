@@ -769,14 +769,17 @@ class JanusProGenerator(ImageGenerator):
             # hidden[:, 0..574, :] -> predictions for tokens 1..575.
             # We skip token 0 (losing 1/576 ~ 0.2% — negligible).
             pred_hidden = hidden[:, :-1, :]       # (P*2, 575, dim)
-            logits = self.model.gen_head(pred_hidden)  # (P*2, 575, vocab)
+            # Upcast to float32 BEFORE CFG to prevent fp16 overflow.
+            # CFG amplifies logit differences by cfg_weight (e.g. 5x);
+            # in fp16 this can overflow to inf, causing NaN in log_softmax.
+            logits = self.model.gen_head(pred_hidden).float()  # (P*2, 575, vocab) fp32
 
-            # Apply CFG to logits
+            # Apply CFG to logits (safe in float32)
             logit_cond = logits[0::2, :, :]       # (P, 575, vocab)
             logit_uncond = logits[1::2, :, :]     # (P, 575, vocab)
             cfg_logits = logit_uncond + cfg_weight * (logit_cond - logit_uncond)
 
-            # Log-probs of the actually-sampled tokens
+            # Log-probs of the actually-sampled tokens (float32)
             log_probs_all = torch.log_softmax(
                 cfg_logits / temperature, dim=-1
             )  # (P, 575, vocab)
@@ -799,7 +802,11 @@ class JanusProGenerator(ImageGenerator):
                 "prompt": prompt,
                 "tokens": tokens.detach().clone(),
                 "generated_tokens": generated_tokens.detach().clone(),
-                "old_log_probs": old_total_log_probs.detach().clone(),
+                # Use Phase 2 log_probs (575 tokens) as old_log_probs so that
+                # old and new are computed the same way (same token count,
+                # same CFG logic).  Phase 1 sums over 576 tokens which would
+                # cause a systematic mismatch with the replay scoring pass.
+                "old_log_probs": total_log_probs.detach().clone(),
                 "temperature": temperature,
                 "cfg_weight": cfg_weight,
                 "parallel_size": parallel_size,
@@ -889,7 +896,8 @@ class JanusProGenerator(ImageGenerator):
             )
             hidden = scoring_out.last_hidden_state
             pred_hidden = hidden[:, :-1, :]
-            logits = score_model.gen_head(pred_hidden)
+            # Upcast to float32 BEFORE CFG to prevent fp16 overflow (same fix as Phase 2).
+            logits = score_model.gen_head(pred_hidden).float()
 
             logit_cond = logits[0::2, :, :]
             logit_uncond = logits[1::2, :, :]
