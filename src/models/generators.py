@@ -258,6 +258,11 @@ class JanusProGenerator(ImageGenerator):
         elif self.load_in_8bit:
             print("Quantization: 8-bit")
 
+        # On quantized models (memory-constrained) auto-offload the
+        # understanding-only vision encoder to free ~600 MB VRAM.
+        if self.load_in_4bit or self.load_in_8bit:
+            self.offload_vision_encoder()
+
     def _get_compute_dtype(self) -> torch.dtype:
         """Return stable compute dtype for generation/decode."""
         if self.load_in_4bit or self.load_in_8bit:
@@ -296,6 +301,56 @@ class JanusProGenerator(ImageGenerator):
         if patched_count > 0:
             print(f"Patched {patched_count} Janus Upsample layer(s) for dtype safety")
         
+    def offload_vision_encoder(self) -> None:
+        """Offload the vision-understanding encoder to CPU to free VRAM.
+
+        Janus-Pro has two separate vision systems:
+          - ``vision_model`` + ``aligner`` : SigLIP encoder for image
+            *understanding* (~300 M params, ~600 MB fp16).
+          - ``gen_vision_model`` + ``gen_head`` etc. : VQ-VAE for image
+            *generation* (needed on GPU).
+
+        During text-to-image generation & RL training the understanding
+        encoder is never used, so moving it to CPU is safe and frees
+        ~600 MB of VRAM — critical for T4 (15 GB) GPUs.
+
+        This is **idempotent**: calling it multiple times is harmless.
+        """
+        import gc
+
+        base_model = self.model
+        # If wrapped by peft, reach into the underlying model
+        if hasattr(base_model, "base_model"):
+            base_model = base_model.base_model
+        if hasattr(base_model, "model"):
+            base_model = base_model.model
+
+        freed_params = 0
+        for attr_name in ("vision_model", "aligner"):
+            mod = getattr(base_model, attr_name, None)
+            if mod is None:
+                continue
+            # Check if already on CPU
+            try:
+                first_param = next(mod.parameters())
+                if first_param.device.type == "cpu":
+                    continue
+            except StopIteration:
+                continue
+            mod.to("cpu")
+            freed_params += sum(p.numel() for p in mod.parameters())
+
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        if freed_params > 0:
+            freed_mb = freed_params * 2 / 1024**2  # fp16
+            print(
+                f"[Memory] Offloaded vision encoder to CPU "
+                f"({freed_params:,} params, ~{freed_mb:.0f} MB freed)"
+            )
+
     def generate(
         self,
         prompt: Union[str, List[str]],
