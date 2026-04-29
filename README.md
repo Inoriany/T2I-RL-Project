@@ -397,15 +397,29 @@ The evaluation automatically categorizes failures:
 
 ## Results
 
-*Results will be updated after training experiments.*
+Janus-Pro-1B fine-tuned with GRPO (CLIP 0.3 + Qwen2.5-VL-32B 0.7 hybrid reward, LoRA r=16, 1029 prompts × 10 epochs, single 24 GB GPU). Evaluation conducted on 4 public benchmarks before vs. after training; raw outputs in `outputs/`.
 
-### Baseline Comparison
+### Benchmark Results (Before → After GRPO)
 
-| Model | Color Binding | Spatial Rel. | Counting | Overall |
-|-------|---------------|--------------|----------|---------|
-| Janus-Pro (baseline) | - | - | - | - |
-| + GRPO (CLIP) | - | - | - | - |
-| + GRPO (VLM) | - | - | - | - |
+| Benchmark | Metric | Before | After | Δ | n | Reward Type |
+|-----------|--------|--------|-------|------|------|-------------|
+| **TIFA** | VQA accuracy | 0.7840 | 0.8184 | **+0.0344** | 4073 | VLM-based |
+| **GenAI-Bench** | VLM score | 0.1448 | 0.2072 | **+0.0624** | 1600 | VLM-based |
+| **T2I-CompBench** | BLIP-VQA overall | 0.2566 | 0.2622 | +0.0056 | 6×val | CLIP-based |
+| **GenEval-2** | Aggregate score | — | 34.28 | — | full | VLM-based |
+
+Sources: `outputs/tifa&GenAI-Bench.csv`, `outputs/eval_result_tifa&genai_rm_img/evaluation/reports/summary.json`, `outputs/5740_2benchmark_geneval2_t2i_compbench/.../evaluation_results*/report.txt`.
+
+**Per-skill TIFA improvements** (after − before): missing-object errors 1952 → 1596 (-18.2%), wrong-count 256 → 220 (-14.1%), wrong-attribute 613 → 535 (-12.7%), other 752 → 612 (-18.6%). Spatial relations remained the hardest skill (wrong-relation 298 → 292, -2.0%).
+
+**GenAI-Bench skill error reductions**: low-alignment 1409 → 1303 (-7.5%), missed-instruction 1424 → 1328 (-6.7%), weak-composition 1380 → 1286 (-6.8%), low-visual-quality 1167 → 1010 (-13.5%).
+
+### Limitations & Honest Caveats
+
+- **VLM-based metrics (TIFA, GenAI-Bench) show clear gains; CLIP-based metrics do not.** A separate qualitative CLIP-score audit on 30 hand-picked prompts showed an overall CLIP delta of -0.0041 (12/30 improved); see `outputs/qualitative_results(1)/clip_score_summary.csv`. This confirms our design choice to weight the Qwen2.5-VL-32B reward at 0.7 rather than relying on CLIP alone.
+- **T2I-CompBench gain (+0.56pp) is modest** and within run-to-run variance for the BLIP-VQA scoring pipeline; we report it for completeness.
+- **Reward–human disagreement**: a 22-prompt failure-mode probe (`outputs/failure_mode_results/reward_quality_table.csv`) shows 12/22 cases where CLIP delta and VLM judgment disagree, motivating the hybrid reward composition.
+- **GenEval-2 baseline-only number** is from the latest evaluation snapshot in `evaluation_results/trained_lora/eval_summary.json`; before/after delta on this benchmark was not run end-to-end and is left as future work.
 
 ### Training Progress
 
