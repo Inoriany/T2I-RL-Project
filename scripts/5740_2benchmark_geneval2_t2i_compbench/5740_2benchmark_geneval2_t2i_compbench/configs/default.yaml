@@ -1,0 +1,112 @@
+# @package _global_
+
+# Default configuration for T2I-RL training
+
+# Model configuration
+model:
+  name: "janus-pro"
+  model_path: "deepseek-ai/Janus-Pro-1B"
+  dtype: "bfloat16"
+  use_flash_attention: true
+  # Try local HuggingFace cache first, then fallback to remote download.
+  prefer_local_files: true
+  
+  # LoRA configuration
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+      - "k_proj"
+      - "o_proj"
+
+# Reward model configuration
+reward:
+  type: "composite"  # clip, vlm, composite
+  
+  clip:
+    model_name: "ViT-L-14"
+    pretrained: "openai"
+    prefer_local_files: true
+    weight: 0.5
+    
+  # VLM API: 硅基流动请设环境变量 SILICONFLOW_API_KEY（或 SILICON_API_KEY），
+  # 且 api_model 使用 Qwen/GLM 等硅基模型 id 以走 SiliconFlow 端点。
+  vlm:
+    use_api: false
+    api_model: null
+    model_name_or_path: "Qwen/Qwen2.5-VL-3B-Instruct"
+    weight: 0.5
+    evaluation_prompt: null  # Use default
+
+# Training configuration
+training:
+  algorithm: "grpo"  # grpo, reward_weighted
+  
+  # Basic params
+  learning_rate: 1e-5
+  num_epochs: 1
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  max_grad_norm: 1.0
+  
+  # GRPO-specific
+  grpo:
+    num_samples_per_prompt: 4
+    temperature: 1.0
+    # Janus CFG; lower → more diverse rollouts (try 3.0–4.5 vs default 5.0).
+    guidance_scale: 5.0
+    clip_ratio: 0.2
+    use_advantage_normalization: true
+    baseline_type: "mean"
+    kl_coef: 0.1
+    
+  # Optimization
+  warmup_steps: 100          # Used only when warmup_ratio == 0
+  warmup_ratio: 0.1          # Fraction of total_steps for warmup (overrides warmup_steps)
+  weight_decay: 0.01
+  
+  # Checkpointing
+  save_steps: 500
+  eval_steps: 100
+  output_dir: "./outputs"
+  # Append subfolder k{K}_r{rank}_a{alpha}_{reward_type} to output_dir
+  append_run_tag_to_output_dir: true
+  save_total_limit: 3
+
+# Data configuration
+data:
+  train_file: null
+  eval_file: null
+  max_train_samples: null
+  # If set to integer k, nested JSON (prompts per category) uses first k per category;
+  # demo benchmark mode uses first k per category as well.
+  max_prompts_per_category: null
+  max_eval_samples: 100
+  
+# Evaluation configuration
+evaluation:
+  benchmarks:
+    - "t2i_compbench"
+    - "tifa"
+    - "geneval"
+  compute_clip_score: true
+  compute_vlm_score: true
+  save_images: true
+  
+# Logging configuration
+logging:
+  use_wandb: true
+  wandb_project: "t2i-rl"
+  wandb_run_name: null
+  logging_steps: 10
+
+# Hardware configuration
+hardware:
+  fp16: false
+  bf16: true
+  dataloader_num_workers: 4
+  seed: 42

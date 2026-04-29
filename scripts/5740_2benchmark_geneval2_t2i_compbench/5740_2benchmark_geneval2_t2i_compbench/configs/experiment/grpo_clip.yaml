@@ -1,0 +1,86 @@
+# @package _global_
+# ============================================================================
+# Experiment: GRPO Training with CLIP Reward
+# ============================================================================
+# Purpose: Train with CLIP reward (fast, no API costs)
+# Usage: python scripts/train.py --config-name experiment/grpo_clip
+# Expected: ~2-3 hours on single 24GB GPU for 10 epochs
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: clip
+  - _self_
+
+experiment:
+  name: "grpo_clip"
+  description: "GRPO training with CLIP-based reward"
+  tags: ["grpo", "clip", "training"]
+
+# Model configuration
+model:
+  model_path: "deepseek-ai/Janus-Pro-1B"
+  dtype: "bfloat16"
+  
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+      - "k_proj"
+      - "o_proj"
+
+# Training configuration
+training:
+  learning_rate: 1e-5
+  num_epochs: 10
+  batch_size: 2  # Per GPU
+  gradient_accumulation_steps: 8  # Effective batch = 16
+  
+  grpo:
+    group_size: 4
+    kl_coef: 0.01
+    normalize_rewards: true
+  
+  warmup_steps: 100
+  save_steps: 500
+  eval_steps: 200
+  output_dir: "./outputs/grpo_clip"
+
+# Reward: CLIP only (fast)
+reward:
+  type: "clip"
+  clip:
+    model_name: "ViT-L-14"
+    pretrained: "openai"
+
+# Data
+data:
+  train_file: "data/prompts/train_prompts.json"
+  eval_file: "data/prompts/val_prompts.json"
+  max_train_samples: null
+  max_eval_samples: 50
+
+# Evaluation during training
+evaluation:
+  benchmarks: []  # Skip during training, run separately
+  compute_clip_score: true
+  compute_vlm_score: false
+  save_images: false  # Save during final eval only
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: "t2i-rl"
+  wandb_run_name: "grpo-clip-${now:%Y%m%d-%H%M%S}"
+  logging_steps: 10
+
+# Hardware
+hardware:
+  bf16: true
+  dataloader_num_workers: 4
+  seed: 42

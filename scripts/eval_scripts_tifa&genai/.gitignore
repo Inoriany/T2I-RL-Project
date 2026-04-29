@@ -1,0 +1,13 @@
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+outputs/
+.ipynb_checkpoints/
+.tmp_upstream/
+.tmp_upstream2/
+
+tests/
+artifacts/
+docs/
+data/

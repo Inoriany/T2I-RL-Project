@@ -1,0 +1,30 @@
+# Janus-Pro-1B Model Configuration
+# Autoregressive unified multimodal model
+
+name: "janus-pro"
+model_path: "deepseek-ai/Janus-Pro-1B"
+dtype: "bfloat16"
+use_flash_attention: true
+
+# Generation parameters
+generation:
+  image_size: 384
+  num_image_tokens: 576  # 24x24 grid
+  cfg_weight: 5.0
+  temperature: 1.0
+  top_p: null  # null for no nucleus sampling
+
+# LoRA configuration
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "v_proj"
+    - "k_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"

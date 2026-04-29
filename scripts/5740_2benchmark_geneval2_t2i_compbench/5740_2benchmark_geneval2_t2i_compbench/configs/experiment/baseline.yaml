@@ -1,0 +1,56 @@
+# @package _global_
+# ============================================================================
+# Baseline Experiment: No RL Training, Just Evaluation
+# ============================================================================
+# Purpose: Establish baseline performance of pretrained Janus-Pro
+# Usage: python scripts/evaluate.py --config-name experiment/baseline
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /reward: clip
+  - _self_
+
+experiment:
+  name: "baseline"
+  description: "Baseline evaluation of pretrained Janus-Pro-1B (no RL)"
+  tags: ["baseline", "evaluation", "janus-pro"]
+
+# Model: Use pretrained without any fine-tuning
+model:
+  lora:
+    enabled: false  # No LoRA, use base model
+
+# No training
+training:
+  enabled: false
+
+# Evaluation on all benchmarks
+evaluation:
+  enabled: true
+  benchmarks:
+    - "t2i_compbench"
+    - "tifa"
+    - "geneval"
+  
+  # Evaluation settings
+  num_samples_per_prompt: 1
+  cfg_weight: 5.0
+  temperature: 1.0
+  
+  # Metrics to compute
+  compute_clip_score: true
+  compute_vlm_score: false  # Save API costs for baseline
+  save_images: true
+  
+  output_dir: "./outputs/baseline"
+
+# Data
+data:
+  eval_file: "data/prompts/val_prompts.json"
+  max_eval_samples: null  # Use all
+
+# Hardware
+hardware:
+  bf16: true
+  seed: 42

@@ -1,0 +1,16 @@
+============================================================
+T2I-RL Evaluation Report
+============================================================
+
+
+## T2I_COMPBENCH
+----------------------------------------
+
+Aggregate Metrics:
+  color_mean: 0.2798
+  shape_mean: 0.2444
+  texture_mean: 0.2657
+  spatial_mean: 0.2482
+  non_spatial_mean: 0.2535
+  complex_mean: 0.2817
+  overall_mean: 0.2622

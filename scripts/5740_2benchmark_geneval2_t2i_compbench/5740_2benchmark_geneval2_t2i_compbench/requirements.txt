@@ -1,0 +1,81 @@
+# =============================================================================
+# T2I-RL: Text-to-Image Generation with Reinforcement Learning
+# Core Dependencies for Understanding-based Reward Training
+# =============================================================================
+
+# Core Deep Learning
+torch>=2.1.0
+torchvision>=0.16.0
+transformers @ git+https://github.com/huggingface/transformers
+accelerate>=0.25.0
+safetensors>=0.4.0
+
+# PEFT (Parameter-Efficient Fine-Tuning)
+peft>=0.7.0
+bitsandbytes>=0.41.0
+
+# Diffusion Models
+diffusers>=0.25.0
+
+# Vision-Language Models
+open-clip-torch>=2.24.0
+timm>=0.9.12
+
+# Janus-Pro (Unified Multimodal Model)
+# Install from GitHub: pip install git+https://github.com/deepseek-ai/Janus.git
+janus @ git+https://github.com/deepseek-ai/Janus.git
+
+# Reinforcement Learning
+trl>=0.7.0  # Transformer Reinforcement Learning
+
+# Data Processing
+datasets>=2.16.0
+Pillow>=10.0.0
+opencv-python>=4.8.0
+albumentations>=1.3.1
+
+# Evaluation & Metrics
+torchmetrics>=1.2.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+rouge-score>=0.1.2
+
+# Configuration & Experiment Tracking
+hydra-core>=1.3.0
+omegaconf>=2.3.0
+wandb>=0.16.0
+tensorboard>=2.15.0
+
+# Utilities
+tqdm>=4.66.0
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+einops>=0.7.0
+rich>=13.0.0
+
+# API Clients (for VLM rewards)
+openai>=1.6.0
+anthropic>=0.8.0
+httpx>=0.25.0
+
+# Logging & Debugging
+loguru>=0.7.0
+lovely-tensors>=0.1.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Code Quality
+black>=23.0.0
+isort>=5.12.0
+flake8>=6.1.0
+mypy>=1.7.0
+
+# ModelScope (for downloading models from ModelScope hub)
+modelscope>=1.13.0
+
+# Qwen2.5-VL utilities (for local VLM reward model)
+qwen-vl-utils>=0.0.14

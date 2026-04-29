@@ -1,0 +1,47 @@
+# VLM-based Reward Configuration (Google Gemini)
+# FREE TIER AVAILABLE - Best for budget-conscious training
+# Get API key at: https://aistudio.google.com/apikey
+
+type: "vlm"
+
+vlm:
+  provider: "gemini"
+  model_name: "gemini-1.5-flash"  # Free tier: 15 RPM, 1500 RPD
+  model_name_or_path: null
+  # Alternative: "gemini-1.5-pro" for better quality (2 RPM, 50 RPD free)
+  
+  # API settings
+  max_retries: 3
+  timeout: 60
+  rate_limit_delay: 4.0  # 15 RPM = 1 request per 4 seconds
+  
+  # Evaluation aspects and weights
+  aspects:
+    object_presence: 0.30
+    attribute_accuracy: 0.30
+    spatial_relations: 0.25
+    overall_quality: 0.15
+  
+  # Custom evaluation prompt (null for default)
+  evaluation_prompt: |
+    Evaluate this generated image against the prompt: "{prompt}"
+    
+    Score each aspect from 0 to 10:
+    1. OBJECT PRESENCE: Are all mentioned objects present? No extra objects?
+    2. ATTRIBUTE ACCURACY: Correct colors, sizes, shapes, textures?
+    3. SPATIAL RELATIONS: Objects positioned correctly relative to each other?
+    4. OVERALL QUALITY: Image quality, coherence, natural appearance?
+    
+    Return ONLY a JSON object:
+    {{"presence": X, "attributes": X, "spatial": X, "quality": X}}
+
+# Caching (to reduce API costs)
+cache:
+  enabled: true
+  cache_dir: "./cache/vlm_rewards"
+
+# Free tier limits (Gemini 1.5 Flash)
+# - 15 requests per minute (RPM)
+# - 1,500 requests per day (RPD)
+# - 1 million tokens per minute
+# Training estimate: 50 prompts x 4 images x 5 epochs = 1000 requests = 1 day

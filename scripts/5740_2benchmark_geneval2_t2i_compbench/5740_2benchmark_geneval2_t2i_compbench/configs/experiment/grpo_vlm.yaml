@@ -1,0 +1,91 @@
+# @package _global_
+# ============================================================================
+# Experiment: GRPO Training with VLM Reward (GPT-4V)
+# ============================================================================
+# Purpose: Train with VLM-based reward for best compositional understanding
+# Usage: python scripts/train.py --config-name experiment/grpo_vlm
+# Note: Requires OPENAI_API_KEY environment variable
+# Expected: Higher API costs, but better compositional alignment
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: vlm_gpt4v
+  - _self_
+
+experiment:
+  name: "grpo_vlm"
+  description: "GRPO training with GPT-4V VLM reward"
+  tags: ["grpo", "vlm", "gpt4v", "training"]
+
+# Model configuration
+model:
+  model_path: "deepseek-ai/Janus-Pro-1B"
+  dtype: "bfloat16"
+  
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+
+# Training configuration
+training:
+  learning_rate: 1e-5
+  num_epochs: 5  # Fewer epochs due to API costs
+  batch_size: 2
+  gradient_accumulation_steps: 4  # Effective batch = 8
+  
+  grpo:
+    group_size: 4
+    kl_coef: 0.01
+    normalize_rewards: true
+  
+  warmup_steps: 50
+  save_steps: 200
+  eval_steps: 100
+  output_dir: "./outputs/grpo_vlm"
+
+# Reward: VLM (GPT-4V)
+reward:
+  type: "vlm"
+  vlm:
+    provider: "openai"
+    model_name: "gpt-4-vision-preview"
+    max_retries: 3
+    timeout: 60
+    rate_limit_delay: 1.0
+    
+    aspects:
+      object_presence: 0.30
+      attribute_accuracy: 0.30
+      spatial_relations: 0.25
+      overall_quality: 0.15
+  
+  cache:
+    enabled: true
+    cache_dir: "./cache/vlm_rewards"
+
+# Data: Use smaller set to manage API costs
+data:
+  train_file: "data/prompts/train_prompts.json"
+  eval_file: "data/prompts/val_prompts.json"
+  max_train_samples: 500  # Limit for cost management
+  max_eval_samples: 25
+
+# Evaluation
+evaluation:
+  compute_clip_score: true
+  compute_vlm_score: true
+  save_images: true
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: "t2i-rl"
+  wandb_run_name: "grpo-vlm-${now:%Y%m%d-%H%M%S}"
+
+# Hardware
+hardware:
+  bf16: true
+  seed: 42

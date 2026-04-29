@@ -1,0 +1,122 @@
+# @package _global_
+# ============================================================================
+# Full Training Configuration for Final Experiments
+# ============================================================================
+# Purpose: Complete training run for paper results
+# Usage: python scripts/train.py --config-name experiment/full_training
+# Expected: ~8-12 hours on single 24GB GPU
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: composite
+  - _self_
+
+experiment:
+  name: "full_training"
+  description: "Full GRPO training with composite reward for final results"
+  tags: ["full", "final", "grpo", "composite"]
+
+# Full model config
+model:
+  model_path: "deepseek-ai/Janus-Pro-1B"
+  dtype: "bfloat16"
+  use_flash_attention: true
+  
+  lora:
+    enabled: true
+    r: 32  # Higher rank for better capacity
+    alpha: 64
+    dropout: 0.05
+    target_modules:
+      - "q_proj"
+      - "v_proj"
+      - "k_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+
+# Full training config
+training:
+  learning_rate: 5e-6  # Lower LR for stability
+  num_epochs: 20
+  batch_size: 2
+  gradient_accumulation_steps: 16  # Effective batch = 32
+  max_grad_norm: 0.5  # Conservative clipping
+  
+  grpo:
+    group_size: 8  # More samples for better gradient estimation
+    kl_coef: 0.005  # Lower KL for more exploration
+    normalize_rewards: true
+    use_advantage_normalization: true
+    baseline_type: "ema"
+    ema_decay: 0.99
+  
+  warmup_steps: 200
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  lr_scheduler: "cosine"
+  
+  save_steps: 500
+  eval_steps: 250
+  logging_steps: 10
+  output_dir: "./outputs/full_training"
+  save_total_limit: 5
+
+# Composite reward
+reward:
+  type: "composite"
+  
+  clip:
+    model_name: "ViT-L-14"
+    pretrained: "openai"
+    weight: 0.2
+    gate_threshold: 0.15
+  
+  vlm:
+    provider: "openai"
+    model_name: "gpt-4-vision-preview"
+    weight: 0.8
+    
+    aspects:
+      object_presence: 0.30
+      attribute_accuracy: 0.30
+      spatial_relations: 0.25
+      overall_quality: 0.15
+  
+  cache:
+    enabled: true
+    cache_dir: "./cache/full_training"
+
+# Full data
+data:
+  train_file: "data/prompts/train_prompts.json"
+  eval_file: "data/prompts/val_prompts.json"
+  max_train_samples: null  # Use all
+  max_eval_samples: 100
+
+# Full evaluation
+evaluation:
+  benchmarks:
+    - "t2i_compbench"
+    - "tifa"
+    - "geneval"
+  compute_clip_score: true
+  compute_vlm_score: true
+  save_images: true
+  num_samples_per_prompt: 3  # Multiple samples for statistics
+
+# Logging
+logging:
+  use_wandb: true
+  wandb_project: "t2i-rl"
+  wandb_run_name: "full-training-${now:%Y%m%d-%H%M%S}"
+  logging_steps: 10
+
+# Hardware
+hardware:
+  bf16: true
+  dataloader_num_workers: 4
+  seed: 42

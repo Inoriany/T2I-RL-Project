@@ -1,0 +1,44 @@
+{
+  "metadata": {
+    "description": "Validation prompts for T2I-RL evaluation",
+    "version": "1.0",
+    "source": "Inspired by T2I-CompBench, TIFA, and GenEval benchmarks"
+  },
+  "prompts": {
+    "color_binding": [
+      "a red car and a blue motorcycle",
+      "a green tree and a yellow sun",
+      "a purple grape and an orange carrot",
+      "a pink flamingo standing in blue water",
+      "a brown bear and a white polar bear"
+    ],
+    "spatial_relations": [
+      "a vase on top of a table",
+      "a cat sleeping under a chair",
+      "a bird perched above a window",
+      "a dog standing behind a tree",
+      "a hat placed on a head"
+    ],
+    "counting": [
+      "four red balloons",
+      "two black cats",
+      "three yellow bananas",
+      "five blue stars",
+      "one large pizza"
+    ],
+    "attribute_binding": [
+      "a small red car and a large blue truck",
+      "an old wooden boat and a new metal ship",
+      "a tall thin tree and a short wide bush",
+      "a bright yellow flower and a dark purple flower",
+      "a smooth white egg and a rough brown coconut"
+    ],
+    "complex_scenes": [
+      "a girl with a red hat walking a brown dog in a green park",
+      "a chef in a white apron cooking in a kitchen with stainless steel appliances",
+      "an old man sitting on a wooden bench reading a blue book",
+      "three friends having coffee at a round table in a cozy cafe",
+      "a surfer riding a wave with a colorful sunset in the background"
+    ]
+  }
+}

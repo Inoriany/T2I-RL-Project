@@ -1,0 +1,325 @@
+{
+  "t2i_compbench": {
+    "color": [
+      {
+        "prompt": "a red apple and a green banana",
+        "score": 0.2653518617153168,
+        "scores": {
+          "clip_score": 0.2653518617153168
+        },
+        "errors": {},
+        "category": "color",
+        "image_path": "evaluation_results/images/0.png"
+      },
+      {
+        "prompt": "a blue car next to a yellow house",
+        "score": 0.19508275389671326,
+        "scores": {
+          "clip_score": 0.19508275389671326
+        },
+        "errors": {},
+        "category": "color",
+        "image_path": "evaluation_results/images/1.png"
+      },
+      {
+        "prompt": "a purple flower in a white vase",
+        "score": 0.23635277152061462,
+        "scores": {
+          "clip_score": 0.23635277152061462
+        },
+        "errors": {},
+        "category": "color",
+        "image_path": "evaluation_results/images/2.png"
+      },
+      {
+        "prompt": "a black cat with orange eyes",
+        "score": 0.29565003514289856,
+        "scores": {
+          "clip_score": 0.29565003514289856
+        },
+        "errors": {},
+        "category": "color",
+        "image_path": "evaluation_results/images/3.png"
+      },
+      {
+        "prompt": "a pink dress on a brown chair",
+        "score": 0.33609849214553833,
+        "scores": {
+          "clip_score": 0.33609849214553833
+        },
+        "errors": {},
+        "category": "color",
+        "image_path": "evaluation_results/images/4.png"
+      }
+    ],
+    "shape": [
+      {
+        "prompt": "a triangular pizza on a round plate",
+        "score": 0.22684745490550995,
+        "scores": {
+          "clip_score": 0.22684745490550995
+        },
+        "errors": {},
+        "category": "shape",
+        "image_path": "evaluation_results/images/0.png"
+      },
+      {
+        "prompt": "a square window in a rectangular building",
+        "score": 0.15851151943206787,
+        "scores": {
+          "clip_score": 0.15851151943206787
+        },
+        "errors": {},
+        "category": "shape",
+        "image_path": "evaluation_results/images/1.png"
+      },
+      {
+        "prompt": "a circular mirror above an oval table",
+        "score": 0.21723780035972595,
+        "scores": {
+          "clip_score": 0.21723780035972595
+        },
+        "errors": {},
+        "category": "shape",
+        "image_path": "evaluation_results/images/2.png"
+      },
+      {
+        "prompt": "a cylindrical vase next to a cubic box",
+        "score": 0.2304549515247345,
+        "scores": {
+          "clip_score": 0.2304549515247345
+        },
+        "errors": {},
+        "category": "shape",
+        "image_path": "evaluation_results/images/3.png"
+      },
+      {
+        "prompt": "a heart-shaped balloon with a star pattern",
+        "score": 0.276256263256073,
+        "scores": {
+          "clip_score": 0.276256263256073
+        },
+        "errors": {},
+        "category": "shape",
+        "image_path": "evaluation_results/images/4.png"
+      }
+    ],
+    "texture": [
+      {
+        "prompt": "a fluffy cat on a smooth marble floor",
+        "score": 0.2996057868003845,
+        "scores": {
+          "clip_score": 0.2996057868003845
+        },
+        "errors": {},
+        "category": "texture",
+        "image_path": "evaluation_results/images/0.png"
+      },
+      {
+        "prompt": "a rough wooden table with a glossy apple",
+        "score": 0.25140589475631714,
+        "scores": {
+          "clip_score": 0.25140589475631714
+        },
+        "errors": {},
+        "category": "texture",
+        "image_path": "evaluation_results/images/1.png"
+      },
+      {
+        "prompt": "a shiny metal robot on a fuzzy carpet",
+        "score": 0.29362955689430237,
+        "scores": {
+          "clip_score": 0.29362955689430237
+        },
+        "errors": {},
+        "category": "texture",
+        "image_path": "evaluation_results/images/2.png"
+      },
+      {
+        "prompt": "a matte ceramic bowl with bumpy oranges",
+        "score": 0.2910211682319641,
+        "scores": {
+          "clip_score": 0.2910211682319641
+        },
+        "errors": {},
+        "category": "texture",
+        "image_path": "evaluation_results/images/3.png"
+      },
+      {
+        "prompt": "a silky dress draped over a woven basket",
+        "score": 0.18353648483753204,
+        "scores": {
+          "clip_score": 0.18353648483753204
+        },
+        "errors": {},
+        "category": "texture",
+        "image_path": "evaluation_results/images/4.png"
+      }
+    ],
+    "spatial": [
+      {
+        "prompt": "a cat sitting on top of a dog",
+        "score": 0.31856730580329895,
+        "scores": {
+          "clip_score": 0.31856730580329895
+        },
+        "errors": {},
+        "category": "spatial",
+        "image_path": "evaluation_results/images/0.png"
+      },
+      {
+        "prompt": "a book under the table",
+        "score": 0.24000710248947144,
+        "scores": {
+          "clip_score": 0.24000710248947144
+        },
+        "errors": {},
+        "category": "spatial",
+        "image_path": "evaluation_results/images/1.png"
+      },
+      {
+        "prompt": "a bird flying above the clouds",
+        "score": 0.28906047344207764,
+        "scores": {
+          "clip_score": 0.28906047344207764
+        },
+        "errors": {},
+        "category": "spatial",
+        "image_path": "evaluation_results/images/2.png"
+      },
+      {
+        "prompt": "a car parked behind the house",
+        "score": 0.20072200894355774,
+        "scores": {
+          "clip_score": 0.20072200894355774
+        },
+        "errors": {},
+        "category": "spatial",
+        "image_path": "evaluation_results/images/3.png"
+      },
+      {
+        "prompt": "a lamp to the left of the computer",
+        "score": 0.23729005455970764,
+        "scores": {
+          "clip_score": 0.23729005455970764
+        },
+        "errors": {},
+        "category": "spatial",
+        "image_path": "evaluation_results/images/4.png"
+      }
+    ],
+    "non_spatial": [
+      {
+        "prompt": "a dog wearing a hat",
+        "score": 0.26413267850875854,
+        "scores": {
+          "clip_score": 0.26413267850875854
+        },
+        "errors": {},
+        "category": "non_spatial",
+        "image_path": "evaluation_results/images/0.png"
+      },
+      {
+        "prompt": "a robot holding a flower",
+        "score": 0.32237768173217773,
+        "scores": {
+          "clip_score": 0.32237768173217773
+        },
+        "errors": {},
+        "category": "non_spatial",
+        "image_path": "evaluation_results/images/1.png"
+      },
+      {
+        "prompt": "a child riding a bicycle",
+        "score": 0.25650787353515625,
+        "scores": {
+          "clip_score": 0.25650787353515625
+        },
+        "errors": {},
+        "category": "non_spatial",
+        "image_path": "evaluation_results/images/2.png"
+      },
+      {
+        "prompt": "an artist painting a landscape",
+        "score": 0.2073216438293457,
+        "scores": {
+          "clip_score": 0.2073216438293457
+        },
+        "errors": {},
+        "category": "non_spatial",
+        "image_path": "evaluation_results/images/3.png"
+      },
+      {
+        "prompt": "a chef cooking in a kitchen",
+        "score": 0.22929449379444122,
+        "scores": {
+          "clip_score": 0.22929449379444122
+        },
+        "errors": {},
+        "category": "non_spatial",
+        "image_path": "evaluation_results/images/4.png"
+      }
+    ],
+    "complex": [
+      {
+        "prompt": "a red apple and a green banana on a blue plate next to a yellow cup",
+        "score": 0.2805503010749817,
+        "scores": {
+          "clip_score": 0.2805503010749817
+        },
+        "errors": {},
+        "category": "complex",
+        "image_path": "evaluation_results/images/0.png"
+      },
+      {
+        "prompt": "a small white cat sitting on a large brown dog in front of a red house",
+        "score": 0.327556312084198,
+        "scores": {
+          "clip_score": 0.327556312084198
+        },
+        "errors": {},
+        "category": "complex",
+        "image_path": "evaluation_results/images/1.png"
+      },
+      {
+        "prompt": "two birds flying above three trees beside a lake",
+        "score": 0.25758135318756104,
+        "scores": {
+          "clip_score": 0.25758135318756104
+        },
+        "errors": {},
+        "category": "complex",
+        "image_path": "evaluation_results/images/2.png"
+      },
+      {
+        "prompt": "a chef in a white hat cooking pasta while a waiter serves wine",
+        "score": 0.2480202317237854,
+        "scores": {
+          "clip_score": 0.2480202317237854
+        },
+        "errors": {},
+        "category": "complex",
+        "image_path": "evaluation_results/images/3.png"
+      },
+      {
+        "prompt": "a vintage red car parked under a green tree next to a blue bench",
+        "score": 0.26292356848716736,
+        "scores": {
+          "clip_score": 0.26292356848716736
+        },
+        "errors": {},
+        "category": "complex",
+        "image_path": "evaluation_results/images/4.png"
+      }
+    ],
+    "aggregate": {
+      "color_mean": 0.2657071828842163,
+      "shape_mean": 0.22186159789562226,
+      "texture_mean": 0.26383977830410005,
+      "spatial_mean": 0.25712938904762267,
+      "non_spatial_mean": 0.2559268742799759,
+      "complex_mean": 0.2753263533115387,
+      "overall_mean": 0.25663186262051263
+    }
+  }
+}

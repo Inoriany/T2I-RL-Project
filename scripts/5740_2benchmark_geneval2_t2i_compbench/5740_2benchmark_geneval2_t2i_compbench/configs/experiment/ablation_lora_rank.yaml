@@ -1,0 +1,50 @@
+# @package _global_
+# ============================================================================
+# Ablation: LoRA Rank Comparison
+# ============================================================================
+# Purpose: Study effect of LoRA rank on training
+# Usage: python scripts/train.py --config-name experiment/ablation_lora_rank \
+#        model.lora.r=4,8,16,32,64 -m
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: clip
+  - _self_
+
+experiment:
+  name: "ablation_lora_rank"
+  description: "Ablation study on LoRA rank"
+  tags: ["ablation", "lora", "rank"]
+
+model:
+  lora:
+    enabled: true
+    r: 16  # Override: 4, 8, 16, 32, 64
+    alpha: 32  # Keep alpha fixed or scale with rank
+
+training:
+  learning_rate: 1e-5
+  num_epochs: 5
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  
+  grpo:
+    group_size: 4
+    kl_coef: 0.01
+  
+  output_dir: "./outputs/ablation_lora/r${model.lora.r}"
+
+reward:
+  type: "clip"
+
+data:
+  train_file: "data/prompts/train_prompts.json"
+  max_train_samples: 200
+
+logging:
+  wandb_run_name: "ablation-lora-r${model.lora.r}"
+
+hardware:
+  seed: 42

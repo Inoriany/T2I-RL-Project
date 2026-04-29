@@ -1,0 +1,45 @@
+# @package _global_
+# ============================================================================
+# Category-Specific Training: Color Binding Focus
+# ============================================================================
+# Purpose: Train specifically on color binding prompts
+# Usage: python scripts/train.py --config-name experiment/category_color
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: clip
+  - _self_
+
+experiment:
+  name: "category_color"
+  description: "Focused training on color binding prompts"
+  tags: ["category", "color_binding", "focused"]
+
+training:
+  learning_rate: 1e-5
+  num_epochs: 10
+  batch_size: 2
+  gradient_accumulation_steps: 8
+  
+  grpo:
+    group_size: 4
+    kl_coef: 0.01
+  
+  output_dir: "./outputs/category_color"
+
+reward:
+  type: "clip"
+
+# Use category-filtered data
+data:
+  train_file: "data/prompts/train_prompts.json"
+  eval_file: "data/prompts/val_prompts.json"
+  filter_category: "color_binding"  # Only color binding prompts
+
+logging:
+  wandb_run_name: "category-color-${now:%Y%m%d-%H%M%S}"
+
+hardware:
+  seed: 42

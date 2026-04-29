@@ -1,0 +1,17 @@
+# CLIP-based Reward Configuration
+# Fast, no API costs, but limited compositional understanding
+
+type: "clip"
+
+clip:
+  model_name: "ViT-L-14"
+  pretrained: "openai"
+  
+  # Alternative models:
+  # - "ViT-B-32" (faster, less accurate)
+  # - "ViT-H-14" (more accurate, slower)
+  # - "ViT-bigG-14" with "laion2b_s39b_b160k" (best, requires open_clip)
+  
+# Reward processing
+normalize: true
+temperature: 1.0  # For softmax if using reward weighting

@@ -1,0 +1,44 @@
+# @package _global_
+# ============================================================================
+# Category-Specific Training: Spatial Relations Focus
+# ============================================================================
+# Purpose: Train specifically on spatial relation prompts
+# Usage: python scripts/train.py --config-name experiment/category_spatial
+# ============================================================================
+
+defaults:
+  - /model: janus_pro
+  - /training: grpo
+  - /reward: clip
+  - _self_
+
+experiment:
+  name: "category_spatial"
+  description: "Focused training on spatial relation prompts"
+  tags: ["category", "spatial_relations", "focused"]
+
+training:
+  learning_rate: 1e-5
+  num_epochs: 10
+  batch_size: 2
+  gradient_accumulation_steps: 8
+  
+  grpo:
+    group_size: 4
+    kl_coef: 0.01
+  
+  output_dir: "./outputs/category_spatial"
+
+reward:
+  type: "clip"
+
+data:
+  train_file: "data/prompts/train_prompts.json"
+  eval_file: "data/prompts/val_prompts.json"
+  filter_category: "spatial_relations"
+
+logging:
+  wandb_run_name: "category-spatial-${now:%Y%m%d-%H%M%S}"
+
+hardware:
+  seed: 42

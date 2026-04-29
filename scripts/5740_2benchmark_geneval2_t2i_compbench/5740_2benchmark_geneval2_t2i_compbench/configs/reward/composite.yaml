@@ -1,0 +1,37 @@
+# Composite Reward Configuration
+# Combines CLIP (fast filtering) + VLM (detailed evaluation)
+
+type: "composite"
+
+# CLIP component (for fast pre-filtering)
+clip:
+  model_name: "ViT-L-14"
+  pretrained: "openai"
+  weight: 0.3
+  
+  # Use CLIP as gate: only call VLM if CLIP score > threshold
+  gate_threshold: 0.2  # null to disable gating
+
+# VLM component (for detailed evaluation)
+# 硅基流动: SILICONFLOW_API_KEY；api_model 用 Qwen/GLM 模型名以调用 SiliconFlow。
+# 默认端点 https://api.siliconflow.com/v1，可用 SILICONFLOW_BASE_URL 覆盖。
+vlm:
+  provider: "local"
+  use_api: false
+  api_model: null
+  model_name: null
+  model_name_or_path: "Qwen/Qwen2.5-VL-3B-Instruct"
+  weight: 0.7
+  
+  aspects:
+    object_presence: 0.30
+    attribute_accuracy: 0.30
+    spatial_relations: 0.25
+    overall_quality: 0.15
+
+# Aggregation method: "weighted_sum", "min", "product"
+aggregation: "weighted_sum"
+
+cache:
+  enabled: true
+  cache_dir: "./cache/composite_rewards"
