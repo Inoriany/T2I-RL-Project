@@ -1,0 +1,6 @@
+Error Type,Baseline Count,Baseline %,Trained Count,Trained %,Change
+Missing Object,10,33.3%,12,40.0%,+6.7%
+Wrong Count,13,43.3%,6,20.0%,-23.3%
+Wrong Attribute,8,26.7%,7,23.3%,-3.3%
+Wrong Relation,3,10.0%,3,10.0%,+0.0%
+No Error,2,6.7%,4,13.3%,+6.7%

@@ -1,0 +1,22 @@
+Prompt,B_CLIP,T_CLIP,CLIP_Δ,B_VLM,T_VLM,VLM_Δ,Agree
+a red apple and a blue cup,0.2728,0.2665,-0.0063,0.5,0.5,0.0,✓
+three cats on a sofa,0.191,0.2671,0.076,0.5,0.5,0.0,✗
+a bird above the tree,0.2201,0.2382,0.0182,0.5,0.5,0.0,✗
+a large elephant and a small mouse,0.2339,0.2881,0.0542,0.5,0.5,0.0,✗
+a chef cooking in a kitchen with pots on a st...,0.2747,0.2519,-0.0228,0.5,0.5,0.0,✗
+three children building a sandcastle on a bea...,0.2632,0.2579,-0.0053,0.5,0.5,0.0,✓
+a busy intersection in a modern city at night...,0.2255,0.2367,0.0112,0.5,0.5,0.0,✗
+a transparent glass vase with colorful flower...,0.3072,0.3124,0.0052,0.5,0.5,0.0,✓
+a reflection of mountains in a still lake,0.2464,0.245,-0.0014,0.5,0.5,0.0,✓
+a shadow of a person on a white wall,0.2624,0.2354,-0.0269,0.5,0.5,0.0,✗
+an empty room with white walls,0.2921,0.3005,0.0083,0.5,0.5,0.0,✓
+a plain white plate on a wooden table,0.2994,0.2604,-0.039,0.5,0.5,0.0,✗
+a single red dot on a white canvas,0.223,0.2107,-0.0122,0.5,0.5,0.0,✗
+a wooden table with metal legs,0.2683,0.2465,-0.0219,0.5,0.5,0.0,✗
+an old leather book with gold lettering,0.2703,0.2779,0.0076,0.5,0.5,0.0,✓
+a wet road reflecting streetlights at night,0.2799,0.2764,-0.0035,0.5,0.5,0.0,✓
+exactly five red roses in a vase,0.1433,0.2003,0.057,0.5,0.5,0.0,✗
+seven colored pencils in a row,0.1813,0.1503,-0.031,0.5,0.5,0.0,✗
+two birds on the left and three birds on the ...,0.2037,0.2162,0.0125,0.5,0.5,0.0,✗
+a cat inside a box with a ball on top of the ...,0.2085,0.2169,0.0085,0.5,0.5,0.0,✓
+a person standing between two trees with moun...,0.2158,0.2278,0.012,0.5,0.5,0.0,✗

@@ -1,0 +1,16 @@
+{
+  "model_path": "/root/.cache/modelscope/hub/models/deepseek-ai/Janus-Pro-1B",
+  "lora_checkpoint": null,
+  "benchmarks": {
+    "geneval2": {
+      "overall_score": 34.275430308674615,
+      "per_skill_scores": {
+        "object": 48.83698326975227,
+        "attribute": 31.208605680059478,
+        "count": 22.10580930002,
+        "position": 21.953172768515355,
+        "verb": 6.9537981372195325
+      }
+    }
+  }
+}
