@@ -1,0 +1,3 @@
+benchmark,before_mean,after_mean,delta,before_count,after_count
+tifa,0.784015,0.818442,0.034427,4073,4073
+genai_bench,0.144813,0.207241,0.062428,1600,1600

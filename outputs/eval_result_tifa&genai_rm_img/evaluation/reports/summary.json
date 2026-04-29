@@ -1,0 +1,42 @@
+{
+  "tifa": {
+    "before_mean": 0.784015,
+    "after_mean": 0.818442,
+    "delta": 0.034427,
+    "before_count": 4073,
+    "after_count": 4073,
+    "before_errors": {
+      "missing_object": 1952,
+      "other": 752,
+      "wrong_relation": 298,
+      "wrong_attribute": 613,
+      "wrong_count": 256
+    },
+    "after_errors": {
+      "missing_object": 1596,
+      "other": 612,
+      "wrong_count": 220,
+      "wrong_attribute": 535,
+      "wrong_relation": 292
+    }
+  },
+  "genai_bench": {
+    "before_mean": 0.144813,
+    "after_mean": 0.207241,
+    "delta": 0.062428,
+    "before_count": 1600,
+    "after_count": 1600,
+    "before_errors": {
+      "low_alignment": 1409,
+      "missed_instruction": 1424,
+      "weak_composition": 1380,
+      "low_visual_quality": 1167
+    },
+    "after_errors": {
+      "low_alignment": 1303,
+      "missed_instruction": 1328,
+      "weak_composition": 1286,
+      "low_visual_quality": 1010
+    }
+  }
+}
